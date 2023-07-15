@@ -1,0 +1,7 @@
+name: ${project.name}
+version: ${git.commit.id.abbrev}
+description: CheatBreaker API plugin
+author: CheatBreaker Development Team
+website: https://cheatbreaker.com
+main: com.cheatbreaker.api.CheatBreakerAPI
+load: STARTUP

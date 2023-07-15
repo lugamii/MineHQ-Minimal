@@ -1,0 +1,19 @@
+Mongo:
+  Host: localhost
+  Port: 27017
+  Database: Practice
+  Auth:
+    Enabled: false
+    Username: admin
+    Database: admin
+    Password: pass
+Redis:
+  Host: localhost
+  Port: 6379
+
+serverName: MineHQ
+networkWebsite: minehq.com
+
+scoreboard:
+  should-add-footer: false # will show the server ip on the scoreboard
+  should-add-ping: false # will show the ping on the match scoreboard

@@ -1,0 +1,6 @@
+name: LunarClientAPI
+version: '1.0'
+description: Lunar Client API
+author: Moonsworth, LLC
+main: com.lunarclient.bukkitapi.LunarClientAPI
+load: STARTUP

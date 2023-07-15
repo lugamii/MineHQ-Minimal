@@ -1,0 +1,6 @@
+name: Practice
+author: Bridge Development Team
+version: ${git.commit.id.abbrev}
+main: net.lugami.practice.Practice
+depend: [ Bridge, qLib ]
+softdepend: [ CheatBreakerAPI ]

@@ -1,0 +1,6 @@
+name: qLib
+version: ggbd31f
+author: Bridge Development Team
+main: net.lugami.qlib.qLib
+softdepend: [ CommonLibs, ProtocolLib ]
+load: STARTUP

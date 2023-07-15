@@ -1,0 +1,23 @@
+Redis:
+  Host: 'localhost'
+  Password: ''
+  DbId: 0
+BackboneRedis:
+  Host: 'localhost'
+  Password: ''
+  DbId: 0
+packetChannel: 'XPacket:ALL'
+UUIDCache:
+  Backend: 'net.lugami.qlib.uuid.impl.RedisUUIDCache'
+NametagPacketRestriction:
+  Enabled: false
+  BypassPrefix: '&a'
+Command:
+  TimeThreshold: 10
+AutoRebootTimes:
+  - 12
+disableNametags: false
+disableTab: false
+disableScoreboard: false
+testing: false
+Bridge: true

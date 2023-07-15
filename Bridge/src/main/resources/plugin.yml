@@ -1,0 +1,5 @@
+name: Bridge
+version: 1.0
+authors: [ "FrozenORB", "Lugami" ]
+main: net.lugami.bridge.bukkit.Bridge
+depend: [ qLib ]

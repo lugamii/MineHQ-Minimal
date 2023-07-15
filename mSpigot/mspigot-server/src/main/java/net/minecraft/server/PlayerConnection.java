@@ -1,0 +1,2927 @@
+package net.minecraft.server;
+
+import net.minecraft.util.com.google.common.base.Charsets;
+import net.minecraft.util.com.google.common.collect.Lists;
+import net.minecraft.util.io.netty.buffer.Unpooled;
+import net.minecraft.util.io.netty.util.concurrent.GenericFutureListener;
+import net.minecraft.util.org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.craftbukkit.SpigotTimings;
+import org.bukkit.craftbukkit.entity.CraftPlayer;
+import org.bukkit.craftbukkit.event.CraftEventFactory;
+import org.bukkit.craftbukkit.inventory.CraftInventoryView;
+import org.bukkit.craftbukkit.inventory.CraftItemStack;
+import org.bukkit.craftbukkit.util.CraftChatMessage;
+import org.bukkit.craftbukkit.util.CraftMagicNumbers;
+import org.bukkit.craftbukkit.util.LazyPlayerSet;
+import org.bukkit.craftbukkit.util.Waitable;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.inventory.*;
+import org.bukkit.event.inventory.InventoryType.SlotType;
+import org.bukkit.event.player.*;
+import org.bukkit.event.player.GuardianEvent.DisplayLevel;
+import org.bukkit.inventory.CraftingInventory;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.util.NumberConversions;
+import org.github.paperspigot.PaperSpigotConfig;
+
+import com.google.common.collect.Collections2;
+import com.google.common.collect.Sets;
+import net.lugami.util.BlockUtil;
+
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.util.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+// CraftBukkit start
+// CraftBukkit end
+// Guardian start
+// Guardian end
+
+public class PlayerConnection implements PacketPlayInListener {
+
+    private static final Logger c = LogManager.getLogger();
+    public final NetworkManager networkManager;
+    private final MinecraftServer minecraftServer;
+    public EntityPlayer player;
+    private int e;
+    private int f;
+    private boolean g;
+    private int h;
+    private long i;
+    private static Random j = new Random();
+    private long k;
+    private volatile int chatThrottle; private static final AtomicIntegerFieldUpdater chatSpamField = AtomicIntegerFieldUpdater.newUpdater(PlayerConnection.class, "chatThrottle"); // CraftBukkit - multithreaded field
+    private int x;
+    private IntHashMap n = new IntHashMap();
+    private double y;
+    private double z;
+    private double q;
+    public boolean checkMovement = true; // CraftBukkit - private -> public
+    private boolean processedDisconnect; // CraftBukkit - added
+
+    // Poweruser start
+    private int movedWronglyViolations = 0;
+    private int movedTooQuicklyViolations = 0;
+    private int lastViolationTick = MinecraftServer.currentTick;
+    private double offsetDistanceSum = 0.0D;
+    // Poweruser end
+
+    // Guardian start
+    public static final int MAX_IN_COMBAT_SPEED_PACKETS = 10;
+    public static final int MAX_NOT_IN_COMBAT_SPEED_PACKETS = 5;
+
+    public int packetsNotReceived = 0;
+    public long lastKeepAlivePacketReceived = -1;
+
+    public double lastGroundY = -1D;
+
+    public long lastHitByExplosion = -1L;
+    public long lastHit = -1L;
+
+    public int hoverPackets = 0;
+    public int speedPackets = 0;
+    public int notHitPackets = 3;
+    public double lastSpeedDistance = -1D;
+
+    public int lastMajorPacketProcessed = MinecraftServer.currentTick;
+    public int packetsReceivedSinceLastMajorTick = 0;
+    public boolean processedMajorTick = false;
+    public double averageMaxPacketsPerSecond = 2.5D;
+
+    public boolean lastHasPos;
+    public boolean lastHasLook;
+
+    public int lastFuckedUpPacketReceivedTick = 0;
+    public long lastCheckedFuckedUpPacketReceivedTick = 0;
+    public int morePacketStrikes = 0;
+
+    public double lastBlockGlitchFromX = 0.0D;
+    public double lastBlockGlitchFromZ = 0.0D;
+    public double lastBlockGlitchToX = 0.0D;
+    public double lastBlockGlitchToZ = 0.0D;
+
+    public long movesReceived = 0L;
+
+    public LinkedList<Packet> lastPacketsQueue = new LinkedList<Packet>();
+
+    public int killAuraTypeAViolations = 0;
+    public int killAuraTypeBViolations = 0;
+    public Map<Integer, List<Long>> killAuraFViolations = new HashMap<Integer, List<Long>>();
+
+    public long lastCalculatedHalfSecondTime = 0L;
+    public double lastHalfSecondX = 0D;
+    public double lastHalfSecondY = -1D;
+    public double lastHalfSecondZ = 0D;
+    public boolean hasMovedInHalfSecond;
+
+    public Set<Integer> keepAlives = new HashSet<Integer>();
+
+    public double lastHitMotionX = 10000.0D;
+    public double lastHitMotionY = 10000.0D;
+    public double lastHitMotionZ = 10000.0D;
+
+    public long lastMotionTick = 0L;
+    public int antiKBViolations = 0;
+
+    public long lastKAPacketTick = MinecraftServer.currentTick;
+    public long lastKAMovementPacket = MinecraftServer.currentTick;
+    public long lastNotificationTick = MinecraftServer.currentTick;
+    public long lastAttackPlayerTime = 0L;
+
+    public boolean isDigging = false;
+    public int digHorizontalMovement = 0;
+
+    public int killAuraRStage = 0;
+    public int killAuraRThreshold = 0;
+    public int autoclickerAStage = 0;
+    public int autoclickerAThreshold = 0;
+    public int autoClickerBStage = 0;
+    public int autoClickerBThreshold = 0;
+    public int killAuraTypePOther = 0;
+    public int killAuraNStage = 0;
+    public int killAuraQThreshold = 0;
+    public boolean killAuraXSwing = false;
+
+    public final List<PacketPlayOutEntityVelocity> velocitiesSent = new ArrayList<PacketPlayOutEntityVelocity>();
+    public final List<Long> velocitySentTimes = new ArrayList<Long>();
+    public long positionSentTime = System.currentTimeMillis();
+
+    public int reducedKbAmount = 0;
+
+    public int miniJumpAmount = 0;
+
+    public double horizontalSpeed = 1.0D;
+    public double newHorizontalSpeed = 0.0D;
+    public long newHorizontalSpeedTime;
+    public double blockFriction = 0.0D;
+    public int blockFrictionX = Integer.MAX_VALUE;
+    public int blockFrictionY = Integer.MAX_VALUE;
+    public int blockFrictionZ = Integer.MAX_VALUE;
+    public double previousHorizontalMove = 0.0D;
+
+    public int flyTypeDAmount = 0;
+
+    public int speedTypeDAmount = 0;
+
+    public int criticalBStage = 0;
+    public double criticalBY;
+    public double criticalBHeight = 0.0D;
+
+    public boolean justSentSprint = false;
+    public long lastSpeedTime = -1L;
+    public long lastSprintViolationTime = System.currentTimeMillis();
+    private long lastJumpEffectTime = System.currentTimeMillis();
+    private long lastKickedForFly;
+
+
+    private double nextExpectedYDelta = 0.0D;
+    public int lastVelocitySentTick = Integer.MIN_VALUE;
+
+    private int gGoodTicks = 0;
+
+    long lastDismounted;
+
+    private int flyModuleGAmount;
+    private int fastFallModuleGAmount;
+    // Guardian end
+
+    // AGC start
+    private int legalMovements = 0;
+    private int illegalMovements = 0;
+    private int suspiciousHeightMovements = 0;
+    // AGC end
+
+    // Alfie start
+    private static Set<Block> glitchBlocks = Sets.newHashSet(Block.getById(13),
+            Block.getById(94),
+            Block.getById(145),
+            Block.getById(54),
+            Block.getById(146),
+            Block.getById(44),
+            Block.getById(154),
+            Block.getById(88),
+            Block.getById(78),
+            Block.getById(126)
+    );
+    // Alfie end
+
+    public PlayerConnection(MinecraftServer minecraftserver, NetworkManager networkmanager, EntityPlayer entityplayer) {
+        this.minecraftServer = minecraftserver;
+        this.networkManager = networkmanager;
+        networkmanager.a((PacketListener) this);
+        this.player = entityplayer;
+        entityplayer.playerConnection = this;
+
+        // CraftBukkit start - add fields and methods
+        this.server = minecraftserver.server;
+    }
+
+    private final org.bukkit.craftbukkit.CraftServer server;
+    private int lastTick = MinecraftServer.currentTick;
+    private int lastDropTick = MinecraftServer.currentTick;
+    private int dropCount = 0;
+    private static final int SURVIVAL_PLACE_DISTANCE_SQUARED = 6 * 6;
+    private static final int CREATIVE_PLACE_DISTANCE_SQUARED = 7 * 7;
+
+    // Get position of last block hit for BlockDamageLevel.STOPPED
+    private double lastPosX = Double.MAX_VALUE;
+    private double lastPosY = Double.MAX_VALUE;
+    private double lastPosZ = Double.MAX_VALUE;
+    private float lastPitch = Float.MAX_VALUE;
+    private float lastYaw = Float.MAX_VALUE;
+    private boolean justTeleported = false;
+    private boolean hasMoved; // Spigot
+
+    // For the PacketPlayOutBlockPlace hack :(
+    Long lastPacket;
+
+    // Store the last block right clicked and what type it was
+    private Item lastMaterial;
+
+    public CraftPlayer getPlayer() {
+        return (this.player == null) ? null : (CraftPlayer) this.player.getBukkitEntity();
+    }
+    private final static HashSet<Integer> invalidItems = new HashSet<Integer>(java.util.Arrays.asList(8, 9, 10, 11, 26, 34, 36, 43, 51, 52, 55, 59, 60, 62, 63, 64, 68, 71, 74, 75, 83, 90, 92, 93, 94, 104, 105, 115, 117, 118, 119, 125, 127, 132, 140, 141, 142, 144)); // TODO: Check after every update.
+    // CraftBukkit end
+
+    public void a() {
+        this.g = false;
+        ++this.e;
+        this.minecraftServer.methodProfiler.a("keepAlive");
+        if ((long) this.e - this.k > 10L) { // Guardian: 40L -> 10L
+            this.k = (long) this.e;
+            this.i = this.d();
+            this.h = (int) this.i;
+
+            // Guardian start
+            packetsNotReceived++;
+            keepAlives.add(h);
+
+            if (keepAlives.size() > 240 && Bukkit.shouldGuardianAct()) {
+                disconnect("Disconnected due to lag");
+                return;
+            }
+            // Guardian end
+
+            this.sendPacket(new PacketPlayOutKeepAlive(this.h));
+        }
+
+        // Guardian start
+        if (packetsNotReceived >= 240 && Bukkit.shouldGuardianAct()) {
+            disconnect("Disconnected due to lag");
+            return;
+        }
+        // Guardian end
+
+        // CraftBukkit start
+        for (int spam; (spam = this.chatThrottle) > 0 && !chatSpamField.compareAndSet(this, spam, spam - 1); ) ;
+        /* Use thread-safe field access instead
+        if (this.chatThrottle > 0) {
+            --this.chatThrottle;
+        }
+        */
+        // CraftBukkit end
+
+        if (this.x > 0) {
+            --this.x;
+        }
+
+        if (this.player.x() > 0L && this.minecraftServer.getIdleTimeout() > 0 && MinecraftServer.ar() - this.player.x() > (long) (this.minecraftServer.getIdleTimeout() * 1000 * 60)) {
+            this.disconnect("You have been idle for too long!");
+        }
+    }
+
+    public NetworkManager b() {
+        return this.networkManager;
+    }
+
+    public void disconnect(String s) {
+        // CraftBukkit start - fire PlayerKickEvent
+        String leaveMessage = EnumChatFormat.YELLOW + this.player.getName() + " left the game.";
+
+        PlayerKickEvent event = new PlayerKickEvent(this.server.getPlayer(this.player), s, leaveMessage);
+
+        if (this.server.getServer().isRunning()) {
+            this.server.getPluginManager().callEvent(event);
+        }
+
+        if (event.isCancelled()) {
+            // Do not kick the player
+            return;
+        }
+        // Send the possibly modified leave message
+        s = event.getReason();
+        // CraftBukkit end
+        ChatComponentText chatcomponenttext = new ChatComponentText(s);
+
+        this.networkManager.handle(new PacketPlayOutKickDisconnect(chatcomponenttext), new GenericFutureListener[] { new PlayerConnectionFuture(this, chatcomponenttext)});
+        this.a(chatcomponenttext); // CraftBukkit - Process quit immediately
+        this.networkManager.g();
+    }
+
+    public void a(PacketPlayInSteerVehicle packetplayinsteervehicle) {
+        this.player.a(packetplayinsteervehicle.c(), packetplayinsteervehicle.d(), packetplayinsteervehicle.e(), packetplayinsteervehicle.f());
+    }
+
+    public void a(PacketPlayInFlying packetplayinflying) {
+        // CraftBukkit start - Check for NaN
+        if (Double.isNaN(packetplayinflying.x) || Double.isNaN(packetplayinflying.y) || Double.isNaN(packetplayinflying.z) || Double.isNaN(packetplayinflying.stance)) {
+            c.warn(player.getName() + " was caught trying to crash the server with an invalid position.");
+            getPlayer().kickPlayer("NaN in position (Hacking?)"); //Spigot "Nope" -> Descriptive reason
+            return;
+        }
+        // CraftBukkit end
+        WorldServer worldserver = this.minecraftServer.getWorldServer(this.player.dimension);
+
+        // Guardian start: Timer
+        long numOfTicksSinceLastPacket = this.networkManager.ticksSinceLastPacket;
+        if (Bukkit.shouldGuardianAct() && !this.player.abilities.canFly && this.player.vehicle == null) {
+            if (networkManager.currentTime - this.positionSentTime > 1000L) {
+                if ((this.lastFuckedUpPacketReceivedTick == MinecraftServer.currentTick) && (this.lastCheckedFuckedUpPacketReceivedTick != MinecraftServer.currentTick) && (packetplayinflying.hasPos != this.lastHasPos) && (packetplayinflying.hasLook != this.lastHasLook)) {
+                    this.lastCheckedFuckedUpPacketReceivedTick = MinecraftServer.currentTick;
+                } else {
+                    this.packetsReceivedSinceLastMajorTick += 1L;
+                    this.lastFuckedUpPacketReceivedTick = MinecraftServer.currentTick;
+                    this.lastHasPos = packetplayinflying.hasPos;
+                    this.lastHasLook = packetplayinflying.hasLook;
+                }
+
+                if ((!this.processedMajorTick) && (this.lastMajorPacketProcessed + 20L < MinecraftServer.currentTick)) {
+                    long diff = MinecraftServer.currentTick - this.lastMajorPacketProcessed;
+                    this.lastMajorPacketProcessed = MinecraftServer.currentTick;
+                    this.processedMajorTick = true;
+
+                    if (numOfTicksSinceLastPacket > 20L) {
+                        this.packetsReceivedSinceLastMajorTick = 0;
+                        this.lastFuckedUpPacketReceivedTick = 0;
+                        this.lastCheckedFuckedUpPacketReceivedTick = 0L;
+                        this.lastHasPos = false;
+                        this.lastHasLook = false;
+                    }
+
+                    if ((numOfTicksSinceLastPacket <= 20L) && (packetsReceivedSinceLastMajorTick / diff >= averageMaxPacketsPerSecond)) {
+
+                        if (++this.morePacketStrikes >= 3L) {
+                            String message = this.player.getName() + " uses Timer Modifications (Module A) [P:" + packetsReceivedSinceLastMajorTick + "]";
+
+                            Bukkit.getPluginManager().callEvent(
+                                    new GuardianEvent(getPlayer(), GuardianEvent.Cheat.TIMER, "A", GuardianEvent.DisplayLevel.HIGH, message)
+                                            .addData("packets", packetsReceivedSinceLastMajorTick)
+                            );
+                        }
+                    } else if (this.morePacketStrikes > 0L) {
+                        this.morePacketStrikes -= 1L;
+                    }
+
+                    this.packetsReceivedSinceLastMajorTick = 0;
+                    this.lastFuckedUpPacketReceivedTick = 0;
+                    this.lastCheckedFuckedUpPacketReceivedTick = 0L;
+                    this.lastHasPos = false;
+                    this.lastHasLook = false;
+                }
+
+                else if (MinecraftServer.currentTick % 20 != 0) {
+                    this.processedMajorTick = false;
+                }
+            }
+        }
+        // Guardian end: Timer
+
+        this.g = true;
+        if (!this.player.viewingCredits) {
+            double d0;
+
+            if (!this.checkMovement) {
+                d0 = packetplayinflying.d() - this.z;
+                if (packetplayinflying.c() == this.y && d0 * d0 < 0.01D && packetplayinflying.e() == this.q) {
+                    this.checkMovement = true;
+                }
+            }
+
+            this.lastKAMovementPacket = MinecraftServer.currentTick; // Guardian
+
+            // CraftBukkit start - fire PlayerMoveEvent
+            Player player = this.getPlayer();
+            // Spigot Start
+            if ( !hasMoved )
+            {
+                Location curPos = player.getLocation();
+                lastPosX = curPos.getX();
+                lastPosY = curPos.getY();
+                lastPosZ = curPos.getZ();
+                lastYaw = curPos.getYaw();
+                lastPitch = curPos.getPitch();
+                hasMoved = true;
+            }
+            // Spigot End
+            Location from = new Location(player.getWorld(), lastPosX, lastPosY, lastPosZ, lastYaw, lastPitch); // Get the Players previous Event location.
+            Location to = player.getLocation().clone(); // Start off the To location as the Players current location.
+
+            // If the packet contains movement information then we update the To location with the correct XYZ.
+            if (packetplayinflying.hasPos && !(packetplayinflying.hasPos && packetplayinflying.y == -999.0D && packetplayinflying.stance == -999.0D)) {
+                to.setX(packetplayinflying.x);
+                to.setY(packetplayinflying.y);
+                to.setZ(packetplayinflying.z);
+            }
+
+            // If the packet contains look information then we update the To location with the correct Yaw & Pitch.
+            if (packetplayinflying.hasLook) {
+                to.setYaw(packetplayinflying.yaw);
+                to.setPitch(packetplayinflying.pitch);
+            }
+
+            // Guardian start: Anti-KB
+            if (Bukkit.shouldGuardianAct() && !this.player.abilities.canFly && this.player.vehicle == null) {
+                if (this.lastMotionTick != 0L) {
+                    if (this.lastMotionTick + 20L < MinecraftServer.currentTick) {
+                        this.lastMotionTick = 0L;
+                        this.lastHitMotionX = (this.lastHitMotionY = this.lastHitMotionZ = 0.0D);
+
+                        if (lastKeepAlivePacketReceived + 800L > networkManager.currentTime) {
+                            if (++antiKBViolations >= 3) {
+                                String message = String.format("%s uses Client Modifications (Module K) at %.1f %.1f %.1f", player.getName(), to.getX(), to.getY(), to.getZ());
+
+                                Bukkit.getPluginManager().callEvent(
+                                        new GuardianEvent(getPlayer(), GuardianEvent.Cheat.CLIENT_MODIFICATIONS, "K", GuardianEvent.DisplayLevel.HIGHEST, message, new Location(player.getWorld(), to.getX(), to.getY(), to.getZ()))
+                                );
+                                antiKBViolations = 0;
+                            }
+                        }
+                    } else if (!packetplayinflying.i()) {
+                        this.lastMotionTick = 0L;
+                        this.lastHitMotionX = (this.lastHitMotionY = this.lastHitMotionZ = 0.0D);
+
+                        if (this.antiKBViolations > 0) {
+                            this.antiKBViolations -= 1;
+                        }
+                    }
+                }
+            } else {
+                this.lastMotionTick = 0L;
+                this.lastHitMotionX = (this.lastHitMotionY = this.lastHitMotionZ = 0.0D);
+            }
+            // Guardian end: Anti-KB
+
+            // Prevent 40 event-calls for less than a single pixel of movement >.>
+            double delta = Math.pow(this.lastPosX - to.getX(), 2) + Math.pow(this.lastPosY - to.getY(), 2) + Math.pow(this.lastPosZ - to.getZ(), 2);
+            float deltaAngle = Math.abs(this.lastYaw - to.getYaw()) + Math.abs(this.lastPitch - to.getPitch());
+
+            // AGC start
+            if (packetplayinflying.hasPos && delta > 0.0 && this.checkMovement && !this.player.dead) {
+                if (!player.getAllowFlight() && !player.isInsideVehicle() && this.player.lastDamageByPlayerTime + 100 < MinecraftServer.currentTick && this.lastVelocitySentTick + 100 < MinecraftServer.currentTick) {
+                    final double offsetHSquared = Math.pow(to.getX() - from.getX(), 2) + Math.pow(to.getZ() - from.getZ(), 2);
+                    int speed = 0;
+                    for (final PotionEffect effect : this.player.getBukkitEntity().getActivePotionEffects()) {
+                        if (effect.getType().equals(PotionEffectType.SPEED)) {
+                            speed = effect.getAmplifier() + 1;
+                            break;
+                        }
+                    }
+
+                    double limit;
+                    if (BlockUtil.isOnGround(to, 0) || BlockUtil.isOnGround(to, 1)) {
+                        limit = 0.34;
+                        if (BlockUtil.isOnStairs(to, 0) || BlockUtil.isOnStairs(to, 1)) {
+                            limit = 0.45;
+                        } else if (BlockUtil.isOnIce(to, 0) || BlockUtil.isOnIce(to, 1)) {
+                            if (BlockUtil.isOnGround(to, -2)) {
+                                limit = 1.3;
+                            } else {
+                                limit = 0.65;
+                            }
+                        } else if (BlockUtil.isOnGround(to, -2)) {
+                            limit = 0.7;
+                        }
+                        limit += ((player.getWalkSpeed() > 0.2f) ? (player.getWalkSpeed() * 10.0f * 0.33f) : 0.0f);
+                        limit += 0.06 * speed;
+                    } else {
+                        limit = 0.36;
+                        if (BlockUtil.isOnStairs(to, 0) || BlockUtil.isOnStairs(to, 1)) {
+                            limit = 0.45;
+                        } else if (BlockUtil.isOnIce(to, 0) || BlockUtil.isOnIce(to, 1)) {
+                            if (BlockUtil.isOnGround(to, -2)) {
+                                limit = 1.3;
+                            } else {
+                                limit = 0.65;
+                            }
+                        } else if (BlockUtil.isOnGround(to, -2)) {
+                            limit = 0.7;
+                        }
+
+                        limit += ((player.getWalkSpeed() > 0.2f) ? (player.getWalkSpeed() * 10.0f * 0.33f) : 0.0f);
+                        limit += 0.02 * speed;
+                    } if (offsetHSquared > Math.pow(limit, 2)) {
+                        ++this.illegalMovements;
+                    } else {
+                        ++this.legalMovements;
+                    }
+
+                    final int total = this.illegalMovements + this.legalMovements;
+                    if (total >= 20) {
+                        final double percentage = this.illegalMovements / 20.0 * 100.0;
+                        if (percentage >= 45.0 && this.player.getEffects().isEmpty()) {
+                            String message = String.format("%s is flying at %.1f %.1f %.1f. [%d%%]", this.player.getName(), to.getX(), to.getY(), to.getZ(), (int) percentage);
+                            Bukkit.getPluginManager().callEvent(new GuardianEvent(player, GuardianEvent.Cheat.FLY_HACKS, "E", DisplayLevel.HIGH, message, to));
+                        }
+
+                        this.illegalMovements = 0;
+                        this.legalMovements = 0;
+                    }
+                }
+
+                if (!player.getAllowFlight() && this.player.vehicle == null && !this.player.inWater && !BlockUtil.isOnGround(to, 0) && !BlockUtil.isOnGround(to, 1)) {
+                    if ((from.getX() != to.getX() || from.getZ() != to.getZ()) && to.getY() == from.getY()) {
+                        if (10 <= ++this.suspiciousHeightMovements) {
+                            final double offsetH = Math.hypot(from.getX() - to.getX(), from.getZ() - to.getZ());
+                            String message = String.format("%s failed Fly Check G. H %.2f. VL %s.", this.player.getName(), offsetH, this.suspiciousHeightMovements);
+                            Bukkit.getPluginManager().callEvent(new GuardianEvent(player, GuardianEvent.Cheat.FLY_HACKS, "G", DisplayLevel.HIGH, message, to));
+                            this.suspiciousHeightMovements = 0;
+                        }
+                    } else {
+                        this.suspiciousHeightMovements = 0;
+                    }
+                } else {
+                    this.suspiciousHeightMovements = 0;
+                }
+            }
+            // AGC end
+
+            // Guardian start
+            float f4 = 0.0625F;
+            AxisAlignedBB axisalignedbb = this.player.boundingBox.clone().grow(f4, f4, f4).a(0.0D, -0.55D, 0.0D);
+
+            boolean touchingAir = !worldserver.c(axisalignedbb);
+            // Guardian end
+
+            if ((delta > 1f / 256 || deltaAngle > 10f) && (this.checkMovement && !this.player.dead)) {
+                this.lastPosX = to.getX();
+                this.lastPosY = to.getY();
+                this.lastPosZ = to.getZ();
+                this.lastYaw = to.getYaw();
+                this.lastPitch = to.getPitch();
+
+                // Guardian start
+                if (Bukkit.shouldGuardianAct()) {
+                    if (this.lastCalculatedHalfSecondTime + 500L < networkManager.currentTime) {
+                        this.lastCalculatedHalfSecondTime = networkManager.currentTime;
+                        this.lastHalfSecondX = to.getX();
+                        this.lastHalfSecondY = to.getY();
+                        this.lastHalfSecondZ = to.getZ();
+
+                        double distanceSquared = NumberConversions.square(to.getX() - from.getX()) + NumberConversions.square(to.getZ() - from.getZ());
+                        this.hasMovedInHalfSecond = (distanceSquared >= 0.0225D);
+                    }
+
+                    if ((!this.player.abilities.canFly) && (this.player.vehicle == null)) {
+                        if (this.player.onGround) {
+                            lastGroundY = from.getY();
+                            hoverPackets = 0;
+                        } else {
+                            if (worldserver.containsLiquidOrClimbable(axisalignedbb)) {
+                                this.lastGroundY = from.getY();
+                            }
+
+                            if ((packetplayinflying.hasPos) && (to.getY() > 0.0D) && (to.getY() == from.getY()) && (touchingAir) && (this.networkManager.lastVehicleTime + TimeUnit.SECONDS.toMillis(5) < networkManager.currentTime)) {
+                                this.hoverPackets++;
+
+                                if (this.hoverPackets >= 10) {
+                                    String message = String.format("%s is hovering at %.1f %.1f %.1f", this.player.getName(), to.getX(), to.getY(), to.getZ());
+                                    Bukkit.getPluginManager().callEvent(
+                                            new GuardianEvent(getPlayer(), GuardianEvent.Cheat.HOVER, "A", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), to.getX(), to.getY(), to.getZ()))
+                                    );
+                                    this.hoverPackets = 0;
+                                }
+                            } else {
+                                this.hoverPackets = 0;
+                            }
+                        }
+                    }
+
+                    if (this.lastGroundY + 1.0D < to.getY()) {
+                        this.killAuraTypeAViolations = 0;
+                        this.killAuraTypeBViolations = 0;
+                    }
+
+                    if ((!this.player.abilities.canFly) && (this.player.vehicle == null)) {
+                        if (this.lastGroundY != -1.0D) {
+                            if (this.lastHitByExplosion + TimeUnit.SECONDS.toMillis(10) < networkManager.currentTime) {
+                                long packetDiff = numOfTicksSinceLastPacket == 0L ? 1L : numOfTicksSinceLastPacket;
+
+                                double limit;
+                                MobEffect mobeffect = this.player.getEffect(MobEffectList.FASTER_MOVEMENT);
+                                int amplification = mobeffect != null ? mobeffect.getAmplifier() + 1 : 0;
+
+                                boolean speedIsActive = false;
+                                switch (amplification) {
+                                    case 0:
+                                        limit = 0.35D;
+                                        break;
+                                    case 1:
+                                        limit = 0.39D;
+                                        this.lastSpeedTime = networkManager.currentTime;
+                                        speedIsActive = true;
+                                        break;
+                                    case 2:
+                                        limit = 0.42D;
+                                        this.lastSpeedTime = networkManager.currentTime;
+                                        speedIsActive = true;
+                                        break;
+                                    default:
+                                        limit = 0.35D + 0.05D * amplification;
+                                        this.lastSpeedTime = networkManager.currentTime;
+                                        speedIsActive = true;
+                                }
+
+                                double speed = Math.sqrt(NumberConversions.square(to.getX() - from.getX()) + NumberConversions.square(to.getZ() - from.getZ()));
+                                if (this.lastKeepAlivePacketReceived + 1000L > networkManager.currentTime) {
+                                    double speedWithLag = speed / packetDiff;
+                                    if (speedWithLag > limit) {
+                                        if (speedWithLag >= this.lastSpeedDistance) {
+                                            if ((!speedIsActive) && (networkManager.currentTime < this.lastSpeedTime + 2000L)) {
+                                            } else {
+                                                boolean isFalsePositive = false;
+                                                double roundedFromX = Math.round(from.getX() * 10000.0D) / 10000.0D;
+                                                double roundedFromZ = Math.round(from.getZ() * 10000.0D) / 10000.0D;
+                                                double roundedToX = Math.round(to.getX() * 10000.0D) / 10000.0D;
+                                                double roundedToZ = Math.round(to.getZ() * 10000.0D) / 10000.0D;
+
+                                                if ((roundedFromX == roundedToX) || (roundedFromZ == roundedToZ)) {
+                                                    isFalsePositive = true;
+                                                } else if ((this.lastBlockGlitchFromX == roundedFromX) || (this.lastBlockGlitchFromZ == roundedFromZ) || (this.lastBlockGlitchFromX == roundedToX) || (this.lastBlockGlitchFromZ == roundedToX)) {
+                                                    isFalsePositive = true;
+                                                } else if ((this.lastBlockGlitchToX == roundedFromX) || (this.lastBlockGlitchToZ == roundedFromZ) || (this.lastBlockGlitchToX == roundedToX) || (this.lastBlockGlitchToZ == roundedToX)) {
+                                                    isFalsePositive = true;
+                                                }
+
+                                                if (!isFalsePositive) {
+                                                    this.lastBlockGlitchFromX = roundedFromX;
+                                                    this.lastBlockGlitchFromZ = roundedFromZ;
+                                                    this.lastBlockGlitchToX = roundedToX;
+                                                    this.lastBlockGlitchToZ = roundedToZ;
+
+                                                    if (++this.speedPackets >= (this.lastHit + 1500L > networkManager.currentTime ? MAX_IN_COMBAT_SPEED_PACKETS : MAX_NOT_IN_COMBAT_SPEED_PACKETS)) {
+                                                        {
+                                                            String message = this.player.getName() + " is speeding (B-Debug-1) [" + from.getX() + " " + from.getY() + " " + from.getZ() + "]";
+                                                            Bukkit.getPluginManager().callEvent(
+                                                                    new GuardianEvent(getPlayer(), GuardianEvent.Cheat.DEBUG, "B-Debug-1", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), from.getX(), from.getY(), from.getZ()))
+                                                            );
+                                                        }
+
+                                                        {
+                                                            String message = this.player.getName() + " is speeding (B-Debug-2) [" + to.getX() + " " + to.getY() + " " + to.getZ() + "]";
+
+                                                            Bukkit.getPluginManager().callEvent(
+                                                                    new GuardianEvent(getPlayer(), GuardianEvent.Cheat.DEBUG, "B-Debug-2", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), to.getX(), to.getY(), to.getZ()))
+                                                            );
+                                                        }
+
+                                                        {
+                                                            String message = this.player.getName() + " is speeding (Module B) [V:" + Math.round(speedWithLag / limit * 10.0D) / 10.0D + "]";
+
+                                                            Bukkit.getPluginManager().callEvent(
+                                                                    new GuardianEvent(getPlayer(), GuardianEvent.Cheat.SPEED_HACKS, "B", GuardianEvent.DisplayLevel.HIGH, message)
+                                                                            .addData("value", Math.round(speedWithLag / limit * 10.0D) / 10.0D)
+                                                            );
+                                                        }
+
+                                                        this.speedPackets = 0;
+                                                    }
+                                                } else {
+                                                    this.speedPackets = 0;
+                                                }
+                                            }
+                                        } else if (++this.speedPackets >= 3) {
+                                            this.speedPackets = 0;
+                                        }
+                                    } else {
+                                        if (++this.notHitPackets >= 3) {
+                                            this.speedPackets = 0;
+                                        }
+                                        if (this.lastHit + 1500L < networkManager.currentTime) {
+                                            this.lastHit = -1L;
+                                        }
+                                    }
+                                }
+                                this.lastSpeedDistance = (speed / packetDiff);
+                            }
+                        }
+                    }
+                }
+
+                if (((this.isDigging) && (to.getX() != this.player.locX)) || (to.getZ() != this.player.locZ)) {
+                    this.digHorizontalMovement += 1;
+                }
+                // Guardian end
+
+                // Skip the first time we do this
+                if (true) { // Spigot - don't skip any move events
+                    PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+                    this.server.getPluginManager().callEvent(event);
+
+                    // If the event is cancelled we move the player back to their old location.
+                    if (event.isCancelled()) {
+                        this.player.playerConnection.sendPacket(new PacketPlayOutPosition(from.getX(), from.getY() + 1.6200000047683716D, from.getZ(), from.getYaw(), from.getPitch(), false));
+                        return;
+                    }
+
+                    /* If a Plugin has changed the To destination then we teleport the Player
+                    there to avoid any 'Moved wrongly' or 'Moved too quickly' errors.
+                    We only do this if the Event was not cancelled. */
+                    if (!to.equals(event.getTo()) && !event.isCancelled()) {
+                        this.player.getBukkitEntity().teleport(event.getTo(), PlayerTeleportEvent.TeleportCause.UNKNOWN);
+                        return;
+                    }
+
+                    /* Check to see if the Players Location has some how changed during the call of the event.
+                    This can happen due to a plugin teleporting the player instead of using .setTo() */
+                    if (!from.equals(this.getPlayer().getLocation()) && this.justTeleported) {
+                        this.justTeleported = false;
+                        return;
+                    }
+                }
+            } else if (lastCalculatedHalfSecondTime + 500L < networkManager.currentTime) { // Guardian start
+                lastCalculatedHalfSecondTime = networkManager.currentTime;
+                hasMovedInHalfSecond = false;
+            }
+            // Guardian end
+
+            if (this.checkMovement && !this.player.dead) {
+                // CraftBukkit end
+                double d1;
+                double d2;
+                double d3;
+
+                if (this.player.vehicle != null) {
+                    float f = this.player.yaw;
+                    float f1 = this.player.pitch;
+
+                    this.player.vehicle.ac();
+                    d1 = this.player.locX;
+                    d2 = this.player.locY;
+                    d3 = this.player.locZ;
+                    if (packetplayinflying.k()) {
+                        f = packetplayinflying.g();
+                        f1 = packetplayinflying.h();
+                    }
+
+                    this.player.onGround = packetplayinflying.i();
+                    this.player.i();
+                    this.player.V = 0.0F;
+                    this.player.setLocation(d1, d2, d3, f, f1);
+                    if (this.player.vehicle != null) {
+                        this.player.vehicle.ac();
+                    }
+
+                    this.minecraftServer.getPlayerList().d(this.player);
+                    if (this.checkMovement) {
+                        this.y = this.player.locX;
+                        this.z = this.player.locY;
+                        this.q = this.player.locZ;
+                    }
+
+                    worldserver.playerJoinedWorld(this.player);
+                    return;
+                }
+
+                if (this.player.isSleeping()) {
+                    this.player.i();
+                    this.player.setLocation(this.y, this.z, this.q, this.player.yaw, this.player.pitch);
+                    worldserver.playerJoinedWorld(this.player);
+                    return;
+                }
+
+                d0 = this.player.locY;
+                this.y = this.player.locX;
+                this.z = this.player.locY;
+                this.q = this.player.locZ;
+                d1 = this.player.locX;
+                d2 = this.player.locY;
+                d3 = this.player.locZ;
+                float f2 = this.player.yaw;
+                float f3 = this.player.pitch;
+
+                boolean onGround = this.player.onGround; // Guardian
+
+                if (packetplayinflying.j() && packetplayinflying.d() == -999.0D && packetplayinflying.f() == -999.0D) {
+                    packetplayinflying.a(false);
+                }
+
+                if (packetplayinflying.j()) {
+                    d1 = packetplayinflying.c();
+                    d2 = packetplayinflying.d();
+                    d3 = packetplayinflying.e();
+                    double d4 = packetplayinflying.f() - packetplayinflying.d();
+                    if (!this.player.isSleeping() && (d4 > 1.65D || d4 < 0.1D)) {
+                        this.disconnect("Illegal stance");
+                        c.warn(this.player.getName() + " had an illegal stance: " + d4);
+                        return;
+                    }
+
+                    if (Math.abs(packetplayinflying.c()) > 3.2E7D || Math.abs(packetplayinflying.e()) > 3.2E7D) {
+                        this.disconnect("Illegal position");
+                        return;
+                    }
+                }
+
+                if (packetplayinflying.k()) {
+                    f2 = packetplayinflying.g();
+                    f3 = packetplayinflying.h();
+                }
+
+                this.player.i();
+                this.player.V = 0.0F;
+                this.player.setLocation(this.y, this.z, this.q, f2, f3);
+                if (!this.checkMovement) {
+                    return;
+                }
+
+                // Guardian start: Rename for readability
+                double xDelta = d1 - this.player.locX;
+                double yDelta = d2 - this.player.locY;
+                double zDelta = d3 - this.player.locZ;
+                // Guardian end
+                // CraftBukkit start - min to max
+                double d7 = Math.max(Math.abs(xDelta), Math.abs(this.player.motX));
+                double d8 = Math.max(Math.abs(yDelta), Math.abs(this.player.motY));
+                double d9 = Math.max(Math.abs(zDelta), Math.abs(this.player.motZ));
+                // CraftBukkit end
+                double d10 = d7 * d7 + d8 * d8 + d9 * d9;
+
+                // Spigot: make "moved too quickly" limit configurable
+                // Poweruser start
+                boolean violationDelayPassed = (this.lastViolationTick + 60 < MinecraftServer.currentTick);
+                if(this.movedTooQuicklyViolations > 0 && violationDelayPassed) {
+                    c.warn(this.player.getName() + " moved too quickly! Violations: " + this.movedTooQuicklyViolations);
+                    this.movedTooQuicklyViolations = 0;
+                }
+                if (d10 > org.spigotmc.SpigotConfig.movedTooQuicklyThreshold && this.checkMovement && (!this.minecraftServer.N() || !this.minecraftServer.M().equals(this.player.getName()))) { // CraftBukkit - Added this.checkMovement condition to solve this check being triggered by teleports
+                    this.movedTooQuicklyViolations++;
+                    this.lastViolationTick = MinecraftServer.currentTick;
+                    // Poweruser end
+                    this.a(this.y, this.z, this.q, this.player.yaw, this.player.pitch);
+                    return;
+                }
+
+                SpigotTimings.connectionTimer_PacketFlying_move.startTiming(); // Poweruser
+
+                boolean flag = worldserver.getCubes(this.player, this.player.boundingBox.clone().shrink((double) f4, (double) f4, (double) f4)).isEmpty();
+
+                if (this.player.onGround && !packetplayinflying.i() && yDelta > 0.0D) {
+                    this.player.bj();
+                }
+
+                // Guardian start
+
+                /*// Fly (Module G) start - Griffin
+                if (!justTeleported && !this.player.abilities.canFly && this.player.vehicle == null && touchingAir && velocitiesSent.isEmpty() && (networkManager.lastVehicleTime + TimeUnit.SECONDS.toMillis(5) < networkManager.currentTime)) {
+                    if (nextExpectedYDelta != 0) {
+                        if (Math.abs(Math.abs(yDelta) - Math.abs(this.nextExpectedYDelta)) > 0.01D) {
+                            this.gGoodTicks = 0;
+
+                            if (yDelta > this.nextExpectedYDelta) {
+                                if (++this.flyModuleGAmount >= 5) {
+                                    this.flyModuleGAmount = 0;
+
+                                    String message = String.format("%s is flying (Module G) at %.1f %.1f %.1f", this.player.getName(), to.getX(), to.getY(), to.getZ());
+
+                                    Bukkit.getPluginManager().callEvent(new GuardianEvent(
+                                            getPlayer(), GuardianEvent.Cheat.FLY_HACKS, "G", GuardianEvent.DisplayLevel.HIGHEST, message)
+                                            .addData("expected", this.nextExpectedYDelta)
+                                            .addData("received", yDelta));
+                                }
+                            } else if (++this.fastFallModuleGAmount >= 5) {
+                                this.fastFallModuleGAmount = 0;
+
+                                String message = String.format("%s is falling too fast (Module G) at %.1f %.1f %.1f", this.player.getName(), to.getX(), to.getY(), to.getZ());
+
+                                Bukkit.getPluginManager().callEvent(new GuardianEvent(
+                                        getPlayer(), GuardianEvent.Cheat.GENERAL, "G", GuardianEvent.DisplayLevel.HIGHEST, message)
+                                        .addData("expected", this.nextExpectedYDelta)
+                                        .addData("received", yDelta));
+                            }
+
+                            if (SpigotConfig.debugGuardian) debugGuardian("G: " + player.getName() + " failed: (E: " + this.nextExpectedYDelta + " | R: " + yDelta + ")");
+                        } else {
+                            if (++this.gGoodTicks >= 30) {
+                                this.flyModuleGAmount = 0;
+                                this.fastFallModuleGAmount = 0;
+                                this.gGoodTicks = 0;
+
+                                if (SpigotConfig.debugGuardian) debugGuardian("G: Reset because we got 30 good ticks.");
+                            }
+                        }
+                    }
+
+                    nextExpectedYDelta = (yDelta - 0.08) * 0.9800000190734863D;
+
+                    if (Math.abs(nextExpectedYDelta) < 0.005D) {
+                        this.nextExpectedYDelta = 0.0D;
+                    }
+                } else {
+                    nextExpectedYDelta = 0.0D;
+                }
+                // Fly (Module G) end*/
+
+                if ((!this.player.abilities.canFly)) {
+                    boolean teleport = networkManager.currentTime - this.positionSentTime < 5000L;
+                    double horizontalSpeed = this.horizontalSpeed;
+                    double blockFriction = this.blockFriction;
+
+                    if (onGround) {
+                        horizontalSpeed *= 1.3D;
+                        blockFriction *= 0.91D;
+                        horizontalSpeed *= 0.16277136D / (blockFriction * blockFriction * blockFriction);
+
+                        if ((Bukkit.shouldGuardianAct()) && (!packetplayinflying.i()) && (yDelta > 1.0E-4D)) {
+                            horizontalSpeed += 0.2D;
+                            MobEffect jumpBoost = this.player.getEffect(MobEffectList.JUMP);
+                            if ((!teleport) && (!this.player.world.c(this.player.boundingBox.grow(0.5D, 0.249D, 0.5D).d(0.0D, 0.25D, 0.0D))) && (jumpBoost == null)) {
+                                double kb = 0.0D;
+
+                                for (PacketPlayOutEntityVelocity packet : this.velocitiesSent) {
+                                    double packetY = packet.c / 8000.0D;
+                                    if ((packetY > 0.0D) && ((kb == 0.0D) || (packetY < kb))) {
+                                        kb = packetY;
+                                    }
+                                }
+
+                                if ((kb == 0.0D) && (yDelta < 0.15D)) {
+                                    if ((this.miniJumpAmount += 20) > 70) {
+                                        this.miniJumpAmount = 0;
+                                        String message = String.format("%s uses Client Modifications (Module M) [%.3f] at %.1f %.1f %.1f", this.player.getName(), yDelta, d1, d2, d3);
+
+                                        Bukkit.getPluginManager().callEvent(
+                                                new GuardianEvent(getPlayer(), GuardianEvent.Cheat.CLIENT_MODIFICATIONS, "M", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), d1, d2, d3))
+                                                        .addData("yDelta", yDelta)
+                                        );
+                                    }
+                                } else if (yDelta < 0.41999998688697815D) {
+                                    if ((kb > 0.1D) && (yDelta < kb * 0.99D) && ((this.reducedKbAmount += 30) > 35)) {
+                                        long percent = Math.round(100.0D * yDelta / kb);
+                                        String message = String.format("%s uses Client Modifications (Module R) [%d%% %.2f/%.2f]", this.player.getName(), percent, yDelta, kb);
+
+                                        Bukkit.getPluginManager().callEvent(
+                                                new GuardianEvent(getPlayer(), GuardianEvent.Cheat.CLIENT_MODIFICATIONS, "R", GuardianEvent.DisplayLevel.HIGHEST, message)
+                                                        .addData("percentage", String.format("%d%%", Math.round(100.0D * yDelta / kb)))
+                                                        .addData("received/expected", String.format("%.2f/%.2f", yDelta, kb))
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        horizontalSpeed = 0.026D;
+                        blockFriction = 0.91D;
+                    }
+
+                    if ((xDelta != 0.0D) || (zDelta != 0.0D)) {
+                        double horizontalMove = Math.sqrt(xDelta * xDelta + zDelta * zDelta);
+
+                        if (this.player.inWater) {
+                            horizontalSpeed *= 3.0D;
+                        }
+
+                        // Guardian - web hotfix (prplz)
+                        if (MinecraftServer.currentTick - this.player.inWebTick < 200) { // in web in last 200 ticks?
+                            if (this.player.world.a(this.player.boundingBox.grow(0.5, 0.5, 0.5), Material.WEB)) { // any web possibly near enough to be touching?
+                                horizontalSpeed *= 5.0D;
+                            }
+                        }
+
+                        // Guardian - piston hotfix (essentially the same as prplz' fix)
+                        if (MinecraftServer.currentTick - this.player.inPistonTick < 50) { // in a piston in the last 50 ticks?
+                            if (this.player.world.a(this.player.boundingBox.grow(1.5D, 1.5D, 1.5D), Material.PISTON)) {
+                                horizontalSpeed *= 5.0D;
+                            }
+                        }
+
+                        if ((Bukkit.shouldGuardianAct()) && (!teleport)) {
+                            double speedup = (horizontalMove - this.previousHorizontalMove) / horizontalSpeed;
+
+                            if (speedup > 1.1D) {
+                                double knockbackSquared = 0.0D;
+
+                                for (PacketPlayOutEntityVelocity packet : this.velocitiesSent) {
+                                    double x = packet.b / 8000.0D;
+                                    double z = packet.d / 8000.0D;
+                                    double xz = x * x + z * z;
+                                    if (xz > knockbackSquared) {
+                                        knockbackSquared = xz;
+                                    }
+                                }
+
+                                if (knockbackSquared != 0.0D) {
+                                    horizontalSpeed += Math.sqrt(knockbackSquared);
+                                    speedup = (horizontalMove - this.previousHorizontalMove) / horizontalSpeed;
+                                }
+                            }
+
+                            if (speedup > 1.1D) {
+                                boolean blocksNear = this.player.world.c(this.player.boundingBox.grow(1.5D, 1.5D, 1.5D));
+                                if (!blocksNear) {
+                                    if (this.player.getEffect(MobEffectList.JUMP) == null && (lastJumpEffectTime + 1500L < networkManager.currentTime)) {
+                                        if ((this.flyTypeDAmount += 20) > 90) {
+                                            this.flyTypeDAmount = 0;
+                                            String message = String.format("%s is flying (Module B) [%d%%] at %.1f %.1f %.1f", this.player.getName(), (int) (100.0D * speedup), d1, d2, d3);
+                                            Bukkit.getPluginManager().callEvent(
+                                                    new GuardianEvent(getPlayer(), GuardianEvent.Cheat.FLY_HACKS, "B", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), d1, d2, d3))
+                                                            .addData("speedup", String.format("%d%%", (int) (100.0D * speedup)))
+                                            );
+                                        }
+                                    } else {
+                                        if (this.player.getEffect(MobEffectList.JUMP) != null) lastJumpEffectTime = System.currentTimeMillis(); // don't let those people fly
+                                    }
+                                } else if ((speedup > 1.5D) && ((this.speedTypeDAmount += 20) > 90)) {
+
+                                    // should be slightly better coming from here
+                                    if (this.player.world.boundingBoxContainsMaterials(this.player.boundingBox.grow(0.5, 1.0, 0.5), glitchBlocks)) {
+                                        horizontalSpeed *= 5.0D;
+                                        speedup = (horizontalMove - this.previousHorizontalMove) / horizontalSpeed;
+                                    }
+
+                                    // double check but I don't like doing the bounding box contain for no reason
+                                    if (speedup > 1.5D) {
+                                        this.speedTypeDAmount = 0;
+
+                                        String message = String.format("%s is speeding (Module A) [%d%%] at %.1f %.1f %.1f", this.player.getName(), (int) (100.0D * speedup), d1, d2, d3);
+                                        Bukkit.getPluginManager().callEvent(
+                                                new GuardianEvent(getPlayer(), GuardianEvent.Cheat.SPEED_HACKS, "A", GuardianEvent.DisplayLevel.HIGH, message, new Location(getPlayer().getWorld(), d1, d2, d3))
+                                                        .addData("speedup", String.format("%d%%", (int) (100.0D * speedup)))
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        this.previousHorizontalMove = (horizontalMove * blockFriction);
+
+                        int blockX = NumberConversions.floor(d1);
+                        int blockY = NumberConversions.floor(d2);
+                        int blockZ = NumberConversions.floor(d3);
+
+                        if ((blockX != this.blockFrictionX) || (blockY != this.blockFrictionY) || (blockZ != this.blockFrictionZ)) {
+                            this.blockFriction = this.player.world.getType(blockX, blockY - 1, blockZ).frictionFactor;
+                            this.blockFrictionX = blockX;
+                            this.blockFrictionY = blockY;
+                            this.blockFrictionZ = blockZ;
+                        }
+                    }
+                }
+                // Guardian end
+
+                this.player.move(xDelta, yDelta, zDelta);
+                this.player.onGround = packetplayinflying.i();
+                this.player.checkMovement(xDelta, yDelta, zDelta);
+                double d11 = yDelta;
+
+                xDelta = d1 - this.player.locX;
+                yDelta = d2 - this.player.locY;
+                if (yDelta > -0.5D || yDelta < 0.5D) {
+                    yDelta = 0.0D;
+                }
+
+                zDelta = d3 - this.player.locZ;
+                d10 = xDelta * xDelta + yDelta * yDelta + zDelta * zDelta;
+                boolean flag1 = false;
+
+                // Spigot: make "moved wrongly" limit configurable
+                // Poweruser start
+                double positionOffset = d10;
+                if(this.player.playerInteractManager.isCreative()) {
+                    positionOffset *= 2.0D;
+                }
+
+                if(this.movedWronglyViolations > 0 && violationDelayPassed) {
+                    c.warn(this.player.getName() + " moved wrongly! Violations: " + this.movedWronglyViolations + " Average Offset: " + String.format("%.2f", (this.offsetDistanceSum / (double) this.movedWronglyViolations)));
+                    this.movedWronglyViolations = 0;
+                    this.offsetDistanceSum = 0.0D;
+                }
+
+                if (positionOffset > org.spigotmc.SpigotConfig.movedWronglyThreshold && !this.player.isSleeping()) {
+                    flag1 = true;
+                    this.lastViolationTick = MinecraftServer.currentTick;
+                    this.movedWronglyViolations++;
+                    this.offsetDistanceSum += MathHelper.sqrt(d10);
+                }
+                // Poweruser end
+
+                // Poweruser start
+                double calculatedX = this.player.locX;
+                double calculatedY = this.player.locY;
+                double calculatedZ = this.player.locZ;
+                this.player.setLocation(d1, d2, d3, f2, f3);
+                boolean flag2 = worldserver.getCubes(this.player, this.player.boundingBox.clone().shrink((double) f4, (double) f4, (double) f4)).isEmpty();
+                boolean rayTraceCollision = delta > 0.3 && worldserver.rayTrace(Vec3D.a(this.y, this.z + 1.0, this.q), Vec3D.a(d1, d2 + 1.0, d3), false, true, false) != null;
+
+                this.player.setLocation(calculatedX, calculatedY, calculatedZ, f2, f3);
+
+                SpigotTimings.connectionTimer_PacketFlying_move.stopTiming(); // Poweruser
+                // Poweruser end
+
+                // Guardian start
+                if (this.flyTypeDAmount > 0) {
+                    this.flyTypeDAmount -= 1;
+                }
+
+                if (this.speedTypeDAmount > 0) {
+                    this.speedTypeDAmount -= 1;
+                }
+
+                if (this.miniJumpAmount > 0) {
+                    this.miniJumpAmount -= 1;
+                }
+
+                if (this.reducedKbAmount > 0) {
+                    this.reducedKbAmount -= 1;
+                }
+
+                if (this.player.vehicle != null) {
+                    networkManager.lastVehicleTime = networkManager.currentTime;
+                }
+                // Guardian end
+
+                // Poweruser start
+                if (flag1 || (!this.player.isSleeping() && flag && !flag2) || rayTraceCollision) {
+                    if(!rayTraceCollision && !flag && e % 3 != 0) {
+                        this.player.setPosition(this.y, this.z, this.q);
+                    } else {
+                        this.a(this.y, this.z, this.q, f2, f3);
+                    }
+
+                    // Guardian start
+//                    if (Bukkit.shouldGuardianAct()) {
+//                        double dx = this.y - d1;
+//                        double dy = this.z - d2;
+//                        double dz = this.q - d3;
+//
+//                        if (!(dx == 0 && dz == 0)) {
+//                            if (Math.abs(dx) > 0.3D || Math.abs(dz) > 0.3D) {
+//                                String legacyMessage = String.format("%s is trying to phase (%.2f, %.2f, %.2f) at %.1f,%.1f,%.1f", this.player.getName(), dx, dy, dz, this.y, this.z, this.q);
+//
+//                                Bukkit.getPluginManager().callEvent(new GuardianEvent(getPlayer(), GuardianEvent.Cheat.PHASE, GuardianEvent.DisplayLevel.HIGH, "A", String.format("at %.1f,%.1f,%.1f", this.y, this.z, this.q), legacyMessage));
+//                            }
+//                        } else {
+//                            String legacyMessage = String.format("%s tries to VClip %.1f blocks at %.1f,%.1f,%.1f", this.player.getName(), -dy, this.y, this.z, this.q);
+//
+//                            Bukkit.getPluginManager().callEvent(new GuardianEvent(getPlayer(), GuardianEvent.Cheat.PHASE, GuardianEvent.DisplayLevel.HIGH, "B", String.format("%.1f blocks at %.1f,%.1f,%.1f", -dy, this.y, this.z, this.q), legacyMessage));
+//                        }
+//                    }
+                    // Guardian end
+                    return;
+                }
+                // Poweruser end
+
+                if (!this.minecraftServer.getAllowFlight() && !this.player.abilities.canFly && !worldserver.c(axisalignedbb)) { // CraftBukkit - check abilities instead of creative mode
+                    if (d11 >= -0.03125D) {
+                        ++this.f;
+                        if (this.f > 80) {
+                            if (Bukkit.shouldGuardianAct() && lastKickedForFly + TimeUnit.MINUTES.toMillis(1) < networkManager.currentTime) { // Guardian - Only kick them if we are currently doing checks, add a delay between kicks
+                                lastKickedForFly = networkManager.currentTime;
+
+                                if (!player.isOp()) { // Guardian: Only kick if they're not opped
+                                    this.disconnect("Flying is not enabled on this server");
+                                    c.warn(this.player.getName() + " was kicked for flying!");
+                                }
+
+                                // Guardian start
+                                String message = String.format("%s was caught flying (Module V) at %.1f %.1f %.1f", this.player.getName(), this.player.locX, this.player.locY, this.player.locZ);
+
+                                Bukkit.getPluginManager().callEvent(
+                                        new GuardianEvent(player, GuardianEvent.Cheat.FLY_HACKS, "V", GuardianEvent.DisplayLevel.HIGH, message, new Location(player.getWorld(), this.player.locX, this.player.locY, this.player.locZ))
+                                );
+                                // Guardian end
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    this.f = 0;
+                }
+
+                this.player.onGround = packetplayinflying.i();
+                SpigotTimings.connectionTimer_PacketFlying_playerChunks.startTiming(); // Poweruser
+                this.minecraftServer.getPlayerList().d(this.player);
+                SpigotTimings.connectionTimer_PacketFlying_playerChunks.stopTiming(); // Poweruser
+                this.player.b(this.player.locY - d0, packetplayinflying.i());
+            } else if (this.e % 20 == 0) {
+                this.a(this.y, this.z, this.q, this.player.yaw, this.player.pitch);
+            }
+        }
+    }
+
+    private AxisAlignedBB getBoundingBoxRounded() {
+        AxisAlignedBB bb = this.player.boundingBox.clone();
+        bb.a = (Math.round(bb.a * 1000000.0D) / 1000000.0D);
+        bb.b = (Math.round(bb.b * 1000000.0D) / 1000000.0D);
+        bb.c = (Math.round(bb.c * 1000000.0D) / 1000000.0D);
+        bb.d = (Math.round(bb.d * 1000000.0D) / 1000000.0D);
+        bb.e = (Math.round(bb.e * 1000000.0D) / 1000000.0D);
+        bb.f = (Math.round(bb.f * 1000000.0D) / 1000000.0D);
+        return bb;
+    }
+
+    public void a(double d0, double d1, double d2, float f, float f1) {
+        // CraftBukkit start - Delegate to teleport(Location)
+        Player player = this.getPlayer();
+        Location from = player.getLocation();
+        Location to = new Location(this.getPlayer().getWorld(), d0, d1, d2, f, f1);
+        PlayerTeleportEvent event = new PlayerTeleportEvent(player, from, to, PlayerTeleportEvent.TeleportCause.UNKNOWN);
+        this.server.getPluginManager().callEvent(event);
+
+        from = event.getFrom();
+        to = event.isCancelled() ? from : event.getTo();
+
+        this.teleport(to);
+    }
+
+    public void teleport(Location dest) {
+        double d0, d1, d2;
+        float f, f1;
+
+        d0 = dest.getX();
+        d1 = dest.getY();
+        d2 = dest.getZ();
+        f = dest.getYaw();
+        f1 = dest.getPitch();
+
+        // TODO: make sure this is the best way to address this.
+        if (Float.isNaN(f)) {
+            f = 0;
+        }
+
+        if (Float.isNaN(f1)) {
+            f1 = 0;
+        }
+
+        this.lastPosX = d0;
+        this.lastPosY = d1;
+        this.lastPosZ = d2;
+        this.lastYaw = f;
+        this.lastPitch = f1;
+        this.justTeleported = true;
+        // CraftBukkit end
+
+        this.checkMovement = false;
+        this.y = d0;
+        this.z = d1;
+        this.q = d2;
+        this.player.setLocation(d0, d1, d2, f, f1);
+        this.player.playerConnection.sendPacket(new PacketPlayOutPosition(d0, d1 + 1.6200000047683716D, d2, f, f1, false));
+        this.lastGroundY = -1.0D; // Guardian
+    }
+
+    public void a(PacketPlayInBlockDig packetplayinblockdig) {
+        if (this.player.dead) return; // CraftBukkit
+        WorldServer worldserver = this.minecraftServer.getWorldServer(this.player.dimension);
+
+        // Guardian start
+        if (!this.player.abilities.canInstantlyBuild) {
+            if (packetplayinblockdig.g() == 0) {
+                this.isDigging = true;
+                this.killAuraRThreshold = 0;
+                this.digHorizontalMovement = 0;
+            } else if ((packetplayinblockdig.g() == 1) || (packetplayinblockdig.g() == 2)) {
+                this.isDigging = false;
+            }
+        }
+        // Guardian end
+
+        this.player.v();
+        if (packetplayinblockdig.g() == 4) {
+            // CraftBukkit start - limit how quickly items can be dropped
+            // If the ticks aren't the same then the count starts from 0 and we update the lastDropTick.
+            if (this.lastDropTick != MinecraftServer.currentTick) {
+                this.dropCount = 0;
+                this.lastDropTick = MinecraftServer.currentTick;
+            } else {
+                // Else we increment the drop count and check the amount.
+                this.dropCount++;
+                if (this.dropCount >= 20) {
+                    PlayerConnection.c.warn(this.player.getName() + " dropped their items too quickly!");
+                    this.disconnect("You dropped your items too quickly (Hacking?)");
+                    return;
+                }
+            }
+            // CraftBukkit end
+            this.player.a(false);
+        } else if (packetplayinblockdig.g() == 3) {
+            this.player.a(true);
+        } else if (packetplayinblockdig.g() == 5) {
+            this.player.bA();
+        } else {
+            boolean flag = false;
+
+            if (packetplayinblockdig.g() == 0) {
+                flag = true;
+            }
+
+            if (packetplayinblockdig.g() == 1) {
+                flag = true;
+            }
+
+            if (packetplayinblockdig.g() == 2) {
+                flag = true;
+            }
+
+            int i = packetplayinblockdig.c();
+            int j = packetplayinblockdig.d();
+            int k = packetplayinblockdig.e();
+
+            if (flag) {
+                double d0 = this.player.locX - ((double) i + 0.5D);
+                double d1 = this.player.locY - ((double) j + 0.5D) + 1.5D;
+                double d2 = this.player.locZ - ((double) k + 0.5D);
+                double d3 = d0 * d0 + d1 * d1 + d2 * d2;
+
+                if (d3 > 36.0D) {
+                    return;
+                }
+
+                if (j >= this.minecraftServer.getMaxBuildHeight()) {
+                    return;
+                }
+            }
+
+            if (packetplayinblockdig.g() == 0) {
+                if (!this.minecraftServer.a(worldserver, i, j, k, this.player)) {
+                    this.player.playerInteractManager.dig(i, j, k, packetplayinblockdig.f());
+                } else {
+                    // CraftBukkit start - fire PlayerInteractEvent
+                    CraftEventFactory.callPlayerInteractEvent(this.player, Action.LEFT_CLICK_BLOCK, i, j, k, packetplayinblockdig.f(), this.player.inventory.getItemInHand());
+                    this.player.playerConnection.sendPacket(new PacketPlayOutBlockChange(i, j, k, worldserver));
+                    // Update any tile entity data for this block
+                    TileEntity tileentity = worldserver.getTileEntity(i, j, k);
+                    if (tileentity != null) {
+                        this.player.playerConnection.sendPacket(tileentity.getUpdatePacket());
+                    }
+                    // CraftBukkit end
+                }
+            } else if (packetplayinblockdig.g() == 2) {
+                this.player.playerInteractManager.a(i, j, k);
+                if (worldserver.getType(i, j, k).getMaterial() != Material.AIR) {
+                    this.player.playerConnection.sendPacket(new PacketPlayOutBlockChange(i, j, k, worldserver));
+                }
+            } else if (packetplayinblockdig.g() == 1) {
+                this.player.playerInteractManager.c(i, j, k);
+                if (worldserver.getType(i, j, k).getMaterial() != Material.AIR) {
+                    this.player.playerConnection.sendPacket(new PacketPlayOutBlockChange(i, j, k, worldserver));
+                }
+            }
+        }
+    }
+
+    // Spigot start - limit place/interactions
+    private long lastPlace = -1;
+    private int packets = 0;
+
+    public void a(PacketPlayInBlockPlace packetplayinblockplace) {
+        boolean throttled = false;
+        // PaperSpigot - Allow disabling the player interaction limiter
+        if (org.github.paperspigot.PaperSpigotConfig.interactLimitEnabled && lastPlace != -1 && packetplayinblockplace.timestamp - lastPlace < 30 && packets++ >= 4) {
+            throttled = true;
+        } else if ( packetplayinblockplace.timestamp - lastPlace >= 30 || lastPlace == -1 )
+        {
+            lastPlace = packetplayinblockplace.timestamp;
+            packets = 0;
+        }
+        // Spigot end
+        WorldServer worldserver = this.minecraftServer.getWorldServer(this.player.dimension);
+
+        // CraftBukkit start
+        if (this.player.dead) return;
+
+        // This is a horrible hack needed because the client sends 2 packets on 'right mouse click'
+        // aimed at a block. We shouldn't need to get the second packet if the data is handled
+        // but we cannot know what the client will do, so we might still get it
+        //
+        // If the time between packets is small enough, and the 'signature' similar, we discard the
+        // second one. This sadly has to remain until Mojang makes their packets saner. :(
+        //  -- Grum
+        if (packetplayinblockplace.getFace() == 255) {
+            if (packetplayinblockplace.getItemStack() != null && packetplayinblockplace.getItemStack().getItem() == this.lastMaterial && this.lastPacket != null && packetplayinblockplace.timestamp - this.lastPacket < 100) {
+                this.lastPacket = null;
+                return;
+            }
+        } else {
+            this.lastMaterial = packetplayinblockplace.getItemStack() == null ? null : packetplayinblockplace.getItemStack().getItem();
+            this.lastPacket = packetplayinblockplace.timestamp;
+        }
+        // CraftBukkit - if rightclick decremented the item, always send the update packet. */
+        // this is not here for CraftBukkit's own functionality; rather it is to fix
+        // a notch bug where the item doesn't update correctly.
+        boolean always = false;
+        // CraftBukkit end
+
+        ItemStack itemstack = this.player.inventory.getItemInHand();
+        boolean flag = false;
+        int i = packetplayinblockplace.c();
+        int j = packetplayinblockplace.d();
+        int k = packetplayinblockplace.e();
+        int l = packetplayinblockplace.getFace();
+
+        this.player.v();
+        boolean isEnderPearl = false;
+        if (packetplayinblockplace.getFace() == 255 || (isEnderPearl = (!isChest(i, j, k) && itemstack != null && itemstack.getItem() != null && CraftMagicNumbers.getMaterial(itemstack.getItem()) == org.bukkit.Material.ENDER_PEARL))) {
+            if (itemstack == null) {
+                return;
+            }
+
+            // CraftBukkit start
+            int itemstackAmount = itemstack.count;
+            // Spigot start - skip the event if throttled
+            if (!throttled) {
+                org.bukkit.event.player.PlayerInteractEvent event = CraftEventFactory.callPlayerInteractEvent(this.player, Action.RIGHT_CLICK_AIR, itemstack);
+                if (event.useItemInHand() != Event.Result.DENY) {
+                    this.player.playerInteractManager.useItem(this.player, this.player.world, itemstack);
+
+                    if (isEnderPearl) {
+                        flag = true;
+                    }
+                }
+            }
+            // Spigot end
+
+            // CraftBukkit - notch decrements the counter by 1 in the above method with food,
+            // snowballs and so forth, but he does it in a place that doesn't cause the
+            // inventory update packet to get sent
+            always = (itemstack.count != itemstackAmount) || itemstack.getItem() == Item.getItemOf(Blocks.WATER_LILY);
+            // CraftBukkit end
+        } else if (packetplayinblockplace.d() >= this.minecraftServer.getMaxBuildHeight() - 1 && (packetplayinblockplace.getFace() == 1 || packetplayinblockplace.d() >= this.minecraftServer.getMaxBuildHeight())) {
+            ChatMessage chatmessage = new ChatMessage("build.tooHigh", new Object[] { Integer.valueOf(this.minecraftServer.getMaxBuildHeight())});
+
+            chatmessage.getChatModifier().setColor(EnumChatFormat.RED);
+            this.player.playerConnection.sendPacket(new PacketPlayOutChat(chatmessage));
+            flag = true;
+        } else {
+            // CraftBukkit start - Check if we can actually do something over this large a distance
+            Location eyeLoc = this.getPlayer().getEyeLocation();
+            double reachDistance = NumberConversions.square(eyeLoc.getX() - i) + NumberConversions.square(eyeLoc.getY() - j) + NumberConversions.square(eyeLoc.getZ() - k);
+            if (reachDistance > (this.getPlayer().getGameMode() == org.bukkit.GameMode.CREATIVE ? CREATIVE_PLACE_DISTANCE_SQUARED : SURVIVAL_PLACE_DISTANCE_SQUARED)) {
+                return;
+            }
+
+            if (throttled || !this.player.playerInteractManager.interact(this.player, worldserver, itemstack, i, j, k, l, packetplayinblockplace.h(), packetplayinblockplace.i(), packetplayinblockplace.j())) { // Spigot - skip the event if throttled
+                always = true; // force PacketPlayOutSetSlot to be sent to client to update ItemStack count
+            }
+            // CraftBukkit end
+
+            flag = true;
+        }
+
+        if (flag) {
+            this.player.playerConnection.sendPacket(new PacketPlayOutBlockChange(i, j, k, worldserver));
+
+            boolean sendSecondUpdate = true;
+            if (l == 0) {
+                --j;
+            } else if (l == 1) {
+                ++j;
+            } else if (l == 2) {
+                --k;
+            } else if (l == 3) {
+                ++k;
+            } else if (l == 4) {
+                --i;
+            } else if (l == 5) {
+                ++i;
+            } else {
+                sendSecondUpdate = false;
+            }
+
+            if (sendSecondUpdate) {
+                this.player.playerConnection.sendPacket(new PacketPlayOutBlockChange(i, j, k, worldserver));
+            }
+        }
+
+        itemstack = this.player.inventory.getItemInHand();
+        if (itemstack != null && itemstack.count <= 0) { // EMC
+            this.player.inventory.items[this.player.inventory.itemInHandIndex] = null;
+            itemstack = null;
+        }
+
+        if (itemstack == null || itemstack.n() == 0) {
+            this.player.g = true;
+            this.player.inventory.items[this.player.inventory.itemInHandIndex] = ItemStack.b(this.player.inventory.items[this.player.inventory.itemInHandIndex]);
+            Slot slot = this.player.activeContainer.getSlot((IInventory) this.player.inventory, this.player.inventory.itemInHandIndex);
+
+            this.player.activeContainer.b();
+            this.player.g = false;
+            // CraftBukkit - TODO CHECK IF NEEDED -- new if structure might not need 'always'. Kept it in for now, but may be able to remove in future
+            if (!ItemStack.matches(this.player.inventory.getItemInHand(), packetplayinblockplace.getItemStack()) || always) {
+                this.sendPacket(new PacketPlayOutSetSlot(this.player.activeContainer.windowId, slot.rawSlotIndex, this.player.inventory.getItemInHand()));
+            }
+        }
+    }
+
+    private boolean isChest(int x, int y, int z) {
+        org.bukkit.Material bukkitMaterial = CraftMagicNumbers.getMaterial(this.player.world.getType(x, y, z));
+        return bukkitMaterial == org.bukkit.Material.CHEST || bukkitMaterial == org.bukkit.Material.TRAPPED_CHEST || bukkitMaterial == org.bukkit.Material.ENDER_CHEST;
+    }
+
+    public void a(IChatBaseComponent ichatbasecomponent) {
+        // CraftBukkit start - Rarely it would send a disconnect line twice
+        if (this.processedDisconnect) {
+            return;
+        } else {
+            this.processedDisconnect = true;
+        }
+        // CraftBukkit end
+        c.info(this.player.getName() + " lost connection: " + ichatbasecomponent.c()); // CraftBukkit - Don't toString the component
+        this.minecraftServer.az();
+        // CraftBukkit start - Replace vanilla quit message handling with our own.
+        /*
+        ChatMessage chatmessage = new ChatMessage("multiplayer.player.left", new Object[] { this.player.getScoreboardDisplayName()});
+
+        chatmessage.getChatModifier().setColor(EnumChatFormat.YELLOW);
+        this.minecraftServer.getPlayerList().sendMessage(chatmessage);
+        */
+
+        this.player.n();
+        String quitMessage = this.minecraftServer.getPlayerList().disconnect(this.player);
+        if ((quitMessage != null) && (quitMessage.length() > 0)) {
+            this.minecraftServer.getPlayerList().sendMessage(CraftChatMessage.fromString(quitMessage));
+        }
+        // CraftBukkit end
+        if (this.minecraftServer.N() && this.player.getName().equals(this.minecraftServer.M())) {
+            c.info("Stopping singleplayer server as player logged out");
+            this.minecraftServer.safeShutdown();
+        }
+    }
+
+    public void sendPacket(Packet packet) {
+        // Spigot start - protocol patch
+        if ( NetworkManager.a( networkManager ).attr( NetworkManager.protocolVersion ).get() >= 17 )
+        {
+            if ( packet instanceof PacketPlayOutWindowItems )
+            {
+                PacketPlayOutWindowItems items = (PacketPlayOutWindowItems) packet;
+                if ( player.activeContainer instanceof ContainerEnchantTable
+                        && player.activeContainer.windowId == items.a )
+                {
+                    ItemStack[] old = items.b;
+                    items.b = new ItemStack[ old.length + 1 ];
+                    items.b[ 0 ] = old[ 0 ];
+                    System.arraycopy( old, 1, items.b, 2, old.length - 1 );
+                    items.b[ 1 ] = new ItemStack( Items.INK_SACK, 3, 4 );
+
+                }
+            } else if ( packet instanceof PacketPlayOutSetSlot )
+            {
+                PacketPlayOutSetSlot items = (PacketPlayOutSetSlot) packet;
+                if ( player.activeContainer instanceof ContainerEnchantTable
+                        && player.activeContainer.windowId == items.a )
+                {
+                    if ( items.b >= 1 )
+                    {
+                        items.b++;
+                    }
+                }
+            }
+        }
+        // Spigot end
+        if (packet instanceof PacketPlayOutChat) {
+            PacketPlayOutChat packetplayoutchat = (PacketPlayOutChat) packet;
+            EnumChatVisibility enumchatvisibility = this.player.getChatFlags();
+
+            if (enumchatvisibility == EnumChatVisibility.HIDDEN) {
+                return;
+            }
+
+            if (enumchatvisibility == EnumChatVisibility.SYSTEM && !packetplayoutchat.d()) {
+                return;
+            }
+        }
+
+        // CraftBukkit start
+        if (packet == null) {
+            return;
+        } else if (packet instanceof PacketPlayOutSpawnPosition) {
+            PacketPlayOutSpawnPosition packet6 = (PacketPlayOutSpawnPosition) packet;
+            this.player.compassTarget = new Location(this.getPlayer().getWorld(), packet6.x, packet6.y, packet6.z);
+        }
+        // CraftBukkit end
+
+        // Guardian start
+        if (((packet instanceof PacketPlayOutEntityVelocity)) && (((PacketPlayOutEntityVelocity)packet).a == this.player.getId())) {
+            this.velocitiesSent.add((PacketPlayOutEntityVelocity) packet);
+            this.velocitySentTimes.add(System.currentTimeMillis());
+            this.lastVelocitySentTick = MinecraftServer.currentTick;
+        }
+
+        if ((packet instanceof PacketPlayOutPosition)) {
+            this.positionSentTime = System.currentTimeMillis();
+        }
+        // Guardian end
+
+        try {
+            this.networkManager.handle(packet, NetworkManager.emptyListenerArray); // Poweruser
+        } catch (Throwable throwable) {
+            CrashReport crashreport = CrashReport.a(throwable, "Sending packet");
+            CrashReportSystemDetails crashreportsystemdetails = crashreport.a("Packet being sent");
+
+            crashreportsystemdetails.a("Packet class", (Callable) (new CrashReportConnectionPacketClass(this, packet)));
+            throw new ReportedException(crashreport);
+        }
+    }
+
+    // Guardian start
+    public void handleKeepAliveSync(PacketPlayInKeepAlive packet)  {
+        this.keepAlives.remove(packet.c());
+
+        long latency = 1000 + this.keepAlives.size() * 1000;
+
+        Iterator it = this.velocitySentTimes.iterator();
+        int i = 0;
+        while (it.hasNext()) {
+            long ts = (Long) it.next();
+
+            if (this.networkManager.currentTime - ts > latency) {
+                it.remove();
+                this.velocitiesSent.remove(i);
+            } else {
+                i++;
+            }
+        }
+
+        if ((this.newHorizontalSpeed != 0.0D) && (this.networkManager.currentTime - this.newHorizontalSpeedTime > latency)) {
+            this.horizontalSpeed = this.newHorizontalSpeed;
+            this.newHorizontalSpeed = 0.0D;
+        }
+    }
+    // Guardian end
+
+    public void a(PacketPlayInHeldItemSlot packetplayinhelditemslot) {
+        // CraftBukkit start
+        if (this.player.dead) return;
+
+        if (packetplayinhelditemslot.c() >= 0 && packetplayinhelditemslot.c() < PlayerInventory.getHotbarSize()) {
+            PlayerItemHeldEvent event = new PlayerItemHeldEvent(this.getPlayer(), this.player.inventory.itemInHandIndex, packetplayinhelditemslot.c());
+            this.server.getPluginManager().callEvent(event);
+            if (event.isCancelled()) {
+                this.sendPacket(new PacketPlayOutHeldItemSlot(this.player.inventory.itemInHandIndex));
+                this.player.v();
+                return;
+            }
+            // CraftBukkit end
+
+            this.player.inventory.itemInHandIndex = packetplayinhelditemslot.c();
+            this.player.v();
+        } else {
+            c.warn(this.player.getName() + " tried to set an invalid carried item");
+            this.disconnect("Invalid hotbar selection (Hacking?)"); // CraftBukkit //Spigot "Nope" -> Descriptive reason
+        }
+    }
+
+    public void a(PacketPlayInChat packetplayinchat) {
+        if (this.player.dead || this.player.getChatFlags() == EnumChatVisibility.HIDDEN) { // CraftBukkit - dead men tell no tales
+            ChatMessage chatmessage = new ChatMessage("chat.cannotSend", new Object[0]);
+
+            chatmessage.getChatModifier().setColor(EnumChatFormat.RED);
+            this.sendPacket(new PacketPlayOutChat(chatmessage));
+        } else {
+            this.player.v();
+            String s = packetplayinchat.c();
+
+            s = StringUtils.normalizeSpace(s);
+
+            for (int i = 0; i < s.length(); ++i) {
+                if (!SharedConstants.isAllowedChatCharacter(s.charAt(i))) {
+                    // CraftBukkit start - threadsafety
+                    if (packetplayinchat.a()) {
+                        // Poweruser start
+                        if(!this.networkManager.lockDownIncomingTraffic()) {
+                            Runnable runnable = new Runnable() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        PlayerConnection.this.disconnect("Illegal characters in chat");
+                                    } catch (Exception e) {
+                                        c.warn(e.toString());
+                                    }
+                                }
+                            };
+                            this.minecraftServer.processQueue.add(runnable);
+                        }
+                        // Poweruser end
+                    } else {
+                        this.disconnect("Illegal characters in chat");
+                    }
+                    // CraftBukkit end
+                    return;
+                }
+            }
+
+            // CraftBukkit start
+            if (!packetplayinchat.a()) {
+                try {
+                    this.minecraftServer.server.playerCommandState = true;
+                    this.handleCommand(s);
+                } finally {
+                    this.minecraftServer.server.playerCommandState = false;
+                }
+            } else if (s.isEmpty()) {
+                c.warn(this.player.getName() + " tried to send an empty message");
+            } else if (getPlayer().isConversing()) {
+                // Spigot start
+                final String message = s;
+                this.minecraftServer.processQueue.add( new Waitable()
+                {
+                    @Override
+                    protected Object evaluate()
+                    {
+                        getPlayer().acceptConversationInput( message );
+                        return null;
+                    }
+                } );
+                // Spigot end
+            } else if (this.player.getChatFlags() == EnumChatVisibility.SYSTEM) { // Re-add "Command Only" flag check
+                ChatMessage chatmessage = new ChatMessage("chat.cannotSend", new Object[0]);
+
+                chatmessage.getChatModifier().setColor(EnumChatFormat.RED);
+                this.sendPacket(new PacketPlayOutChat(chatmessage));
+            } else if (true) {
+                this.chat(s, true);
+                // CraftBukkit end - the below is for reference. :)
+            } else {
+                ChatMessage chatmessage1 = new ChatMessage("chat.type.text", new Object[] { this.player.getScoreboardDisplayName(), s});
+
+                this.minecraftServer.getPlayerList().sendMessage(chatmessage1, false);
+            }
+
+            // Spigot - spam exclusions
+            boolean counted = true;
+            for ( String exclude : org.spigotmc.SpigotConfig.spamExclusions )
+            {
+                if ( exclude != null && s.startsWith( exclude ) )
+                {
+                    counted = false;
+                    break;
+                }
+            }
+            // CraftBukkit start - replaced with thread safe throttle
+            // this.chatThrottle += 20;
+            if (counted && chatSpamField.addAndGet(this, 20) > 200 && !this.minecraftServer.getPlayerList().isOp(this.player.getProfile())) {
+                if (packetplayinchat.a()) {
+                    // Poweruser start
+                    if(!this.networkManager.lockDownIncomingTraffic()) {
+                        Runnable runnable = new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    PlayerConnection.this.disconnect("disconnect.spam");
+                                } catch (Exception e) {
+                                    c.warn(e.toString());
+                                }
+                            }
+                        };
+                        this.minecraftServer.processQueue.add(runnable);
+                    }
+                    // Poweruser end
+                } else {
+                    this.disconnect("disconnect.spam");
+                }
+                // CraftBukkit end
+            }
+        }
+    }
+
+    // CraftBukkit start - add method
+    public void chat(String s, boolean async) {
+        if (s.isEmpty() || this.player.getChatFlags() == EnumChatVisibility.HIDDEN) {
+            return;
+        }
+
+        if (!async && s.startsWith("/")) {
+            this.handleCommand(s);
+        } else if (this.player.getChatFlags() == EnumChatVisibility.SYSTEM) {
+            // Do nothing, this is coming from a plugin
+        } else {
+            Player player = this.getPlayer();
+            AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(async, player, s, new LazyPlayerSet());
+            this.server.getPluginManager().callEvent(event);
+
+            if (PlayerChatEvent.getHandlerList().getRegisteredListeners().length != 0) {
+                // Evil plugins still listening to deprecated event
+                final PlayerChatEvent queueEvent = new PlayerChatEvent(player, event.getMessage(), event.getFormat(), event.getRecipients());
+                queueEvent.setCancelled(event.isCancelled());
+                // Poweruser start
+                Runnable runnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            org.bukkit.Bukkit.getPluginManager().callEvent(queueEvent);
+
+                            if (queueEvent.isCancelled()) {
+                                return;
+                            }
+
+                            String message = String.format(queueEvent.getFormat(), queueEvent.getPlayer().getDisplayName(), queueEvent.getMessage());
+                            PlayerConnection.this.minecraftServer.console.sendMessage(message);
+                            if (((LazyPlayerSet) queueEvent.getRecipients()).isLazy()) {
+                                for (Object player : PlayerConnection.this.minecraftServer.getPlayerList().players) {
+                                    ((EntityPlayer) player).sendMessage(CraftChatMessage.fromString(message));
+                                }
+                            } else {
+                                for (Player player : queueEvent.getRecipients()) {
+                                    player.sendMessage(message);
+                                }
+                            }
+                        } catch (Exception e) {
+                            c.warn(e.toString());
+                        }
+                    }};
+                if (async) {
+                    minecraftServer.processQueue.add(runnable);
+                } else {
+                    runnable.run();
+                }
+                // Poweruser end
+            } else {
+                if (event.isCancelled()) {
+                    return;
+                }
+
+                s = String.format(event.getFormat(), event.getPlayer().getDisplayName(), event.getMessage());
+                minecraftServer.console.sendMessage(s);
+                if (((LazyPlayerSet) event.getRecipients()).isLazy()) {
+                    for (Object recipient : minecraftServer.getPlayerList().players) {
+                        ((EntityPlayer) recipient).sendMessage(CraftChatMessage.fromString(s));
+                    }
+                } else {
+                    for (Player recipient : event.getRecipients()) {
+                        recipient.sendMessage(s);
+                    }
+                }
+            }
+        }
+    }
+    // CraftBukkit end
+
+    private void handleCommand(String s) {
+        org.bukkit.craftbukkit.SpigotTimings.playerCommandTimer.startTiming(); // Spigot
+
+        // CraftBukkit start - whole method
+        if ( org.spigotmc.SpigotConfig.logCommands ) PlayerConnection.c.info(this.player.getName() + " issued server command: " + s);
+
+        CraftPlayer player = this.getPlayer();
+
+        PlayerCommandPreprocessEvent event = new PlayerCommandPreprocessEvent(player, s, new LazyPlayerSet());
+        this.server.getPluginManager().callEvent(event);
+
+        if (event.isCancelled()) {
+            org.bukkit.craftbukkit.SpigotTimings.playerCommandTimer.stopTiming(); // Spigot
+            return;
+        }
+
+        try {
+            if (this.server.dispatchCommand(event.getPlayer(), event.getMessage().substring(1))) {
+                org.bukkit.craftbukkit.SpigotTimings.playerCommandTimer.stopTiming(); // Spigot
+                return;
+            }
+        } catch (org.bukkit.command.CommandException ex) {
+            player.sendMessage(org.bukkit.ChatColor.RED + "An internal error occurred while attempting to perform this command");
+            java.util.logging.Logger.getLogger(PlayerConnection.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+            org.bukkit.craftbukkit.SpigotTimings.playerCommandTimer.stopTiming(); // Spigot
+            return;
+        }
+        org.bukkit.craftbukkit.SpigotTimings.playerCommandTimer.stopTiming(); // Spigot
+        //this.minecraftServer.getCommandHandler().a(this.player, s);
+        // CraftBukkit end
+    }
+
+    public void a(PacketPlayInArmAnimation packetplayinarmanimation) {
+        if (this.player.dead) return; // CraftBukkit
+        this.player.v();
+        if (packetplayinarmanimation.d() == 1) {
+            // CraftBukkit start - Raytrace to look for 'rogue armswings'
+
+            // we only ever use this event when players are sneaking so why raytrace for no reason
+            if (this.player.isSneaking()) {
+                float f = 1.0F;
+                float f1 = this.player.lastPitch + (this.player.pitch - this.player.lastPitch) * f;
+                float f2 = this.player.lastYaw + (this.player.yaw - this.player.lastYaw) * f;
+                double d0 = this.player.lastX + (this.player.locX - this.player.lastX) * (double) f;
+                double d1 = this.player.lastY + (this.player.locY - this.player.lastY) * (double) f + 1.62D - (double) this.player.height;
+                double d2 = this.player.lastZ + (this.player.locZ - this.player.lastZ) * (double) f;
+                Vec3D vec3d = Vec3D.a(d0, d1, d2);
+
+                float f3 = MathHelper.cos(-f2 * 0.017453292F - 3.1415927F);
+                float f4 = MathHelper.sin(-f2 * 0.017453292F - 3.1415927F);
+                float f5 = -MathHelper.cos(-f1 * 0.017453292F);
+                float f6 = MathHelper.sin(-f1 * 0.017453292F);
+                float f7 = f4 * f5;
+                float f8 = f3 * f5;
+                double d3 = player.playerInteractManager.getGameMode() == EnumGamemode.CREATIVE ? 5.0D : 4.5D; // Spigot
+                Vec3D vec3d1 = vec3d.add((double) f7 * d3, (double) f6 * d3, (double) f8 * d3);
+                MovingObjectPosition movingobjectposition = this.player.world.rayTrace(vec3d, vec3d1, false);
+
+                if (movingobjectposition == null || movingobjectposition.type != EnumMovingObjectType.BLOCK) {
+                    CraftEventFactory.callPlayerInteractEvent(this.player, Action.LEFT_CLICK_AIR, this.player.inventory.getItemInHand());
+                }
+            }
+
+            // Arm swing animation
+            PlayerAnimationEvent event = new PlayerAnimationEvent(this.getPlayer());
+            this.server.getPluginManager().callEvent(event);
+
+            if (event.isCancelled()) return;
+            // CraftBukkit end
+
+            this.player.ba();
+        }
+    }
+
+    public void a(PacketPlayInEntityAction packetplayinentityaction) {
+        // CraftBukkit start
+        if (this.player.dead) return;
+
+        this.player.v();
+        if (packetplayinentityaction.d() == 1 || packetplayinentityaction.d() == 2) {
+            PlayerToggleSneakEvent event = new PlayerToggleSneakEvent(this.getPlayer(), packetplayinentityaction.d() == 1);
+            this.server.getPluginManager().callEvent(event);
+
+            if (event.isCancelled()) {
+                return;
+            }
+        }
+
+        if (packetplayinentityaction.d() == 4 || packetplayinentityaction.d() == 5) {
+            PlayerToggleSprintEvent event = new PlayerToggleSprintEvent(this.getPlayer(), packetplayinentityaction.d() == 4);
+            this.server.getPluginManager().callEvent(event);
+
+            if (event.isCancelled()) {
+                return;
+            }
+        }
+        // CraftBukkit end
+
+        if (packetplayinentityaction.d() == 1) {
+            this.player.setSneaking(true);
+        } else if (packetplayinentityaction.d() == 2) {
+            this.player.setSneaking(false);
+        } else if (packetplayinentityaction.d() == 4) {
+            this.player.setSprinting(true);
+            this.player.setSneaking(false); // MineHQ
+
+            // Guardian start
+            if (this.player.isBlocking()) {
+                this.player.bA(); // stopUsingItem
+            }
+            // Guardian end
+        } else if (packetplayinentityaction.d() == 5) {
+            this.player.setSprinting(false);
+        } else if (packetplayinentityaction.d() == 3) {
+            this.player.a(false, true, true);
+            //this.checkMovement = false; // CraftBukkit - this is handled in teleport
+        } else if (packetplayinentityaction.d() == 6) {
+            if (this.player.vehicle != null && this.player.vehicle instanceof EntityHorse) {
+                ((EntityHorse) this.player.vehicle).w(packetplayinentityaction.e());
+            }
+        } else if (packetplayinentityaction.d() == 7 && this.player.vehicle != null && this.player.vehicle instanceof EntityHorse) {
+            ((EntityHorse) this.player.vehicle).g(this.player);
+        }
+    }
+
+    public void a(PacketPlayInUseEntity packetplayinuseentity) {
+        if ( packetplayinuseentity.c() == null ) return; // Spigot - protocol patch
+        if (this.player.dead) return; // CraftBukkit
+        WorldServer worldserver = this.minecraftServer.getWorldServer(this.player.dimension);
+        Entity entity = packetplayinuseentity.a((World) worldserver);
+        // Spigot Start
+        if ( entity == player )
+        {
+            disconnect( "Cannot interact with self!" );
+            return;
+        }
+        // Spigot End
+
+        this.player.v();
+        if (entity != null) {
+            boolean flag = this.player.hasLineOfSight(entity);
+            double d0 = 36.0D;
+
+            if (!flag) {
+                d0 = 9.0D;
+            }
+
+            if (this.player.f(entity) < d0) {
+                ItemStack itemInHand = this.player.inventory.getItemInHand(); // CraftBukkit
+                if (packetplayinuseentity.c() == EnumEntityUseAction.INTERACT) {
+                    // CraftBukkit start
+                    boolean triggerTagUpdate = itemInHand != null && itemInHand.getItem() == Items.NAME_TAG && entity instanceof EntityInsentient;
+                    boolean triggerChestUpdate = itemInHand != null && itemInHand.getItem() == Item.getItemOf(Blocks.CHEST) && entity instanceof EntityHorse;
+                    boolean triggerLeashUpdate = itemInHand != null && itemInHand.getItem() == Items.LEASH && entity instanceof EntityInsentient;
+                    PlayerInteractEntityEvent event = new PlayerInteractEntityEvent((Player) this.getPlayer(), entity.getBukkitEntity());
+                    this.server.getPluginManager().callEvent(event);
+
+                    if (triggerLeashUpdate && (event.isCancelled() || this.player.inventory.getItemInHand() == null || this.player.inventory.getItemInHand().getItem() != Items.LEASH)) {
+                        // Refresh the current leash state
+                        this.sendPacket(new PacketPlayOutAttachEntity(1, entity, ((EntityInsentient) entity).getLeashHolder()));
+                    }
+
+                    if (triggerTagUpdate && (event.isCancelled() || this.player.inventory.getItemInHand() == null || this.player.inventory.getItemInHand().getItem() != Items.NAME_TAG)) {
+                        // Refresh the current entity metadata
+                        this.sendPacket(new PacketPlayOutEntityMetadata(entity.getId(), entity.datawatcher, true));
+                    }
+                    if (triggerChestUpdate && (event.isCancelled() || this.player.inventory.getItemInHand() == null || this.player.inventory.getItemInHand().getItem() != Item.getItemOf(Blocks.CHEST))) {
+                        this.sendPacket(new PacketPlayOutEntityMetadata(entity.getId(), entity.datawatcher, true));
+                    }
+
+                    if (event.isCancelled()) {
+                        return;
+                    }
+                    // CraftBukkit end
+
+                    this.player.q(entity);
+
+                    // CraftBukkit start
+                    if (itemInHand != null && itemInHand.count <= -1) {
+                        this.player.updateInventory(this.player.activeContainer);
+                    }
+                    // CraftBukkit end
+                } else if (packetplayinuseentity.c() == EnumEntityUseAction.ATTACK) {
+                    if (entity instanceof EntityItem || entity instanceof EntityExperienceOrb || entity instanceof EntityArrow || entity == this.player) {
+                        this.disconnect("Attempting to attack an invalid entity");
+                        this.minecraftServer.warning("Player " + this.player.getName() + " tried to attack an invalid entity");
+                        return;
+                    }
+
+                    // Guardian start
+                    if (this.player.isBlocking()) {
+                        this.player.bA(); // stopUsingItem
+                    }
+                    // Guardian end
+
+                    this.player.attack(entity);
+
+                    // CraftBukkit start
+                    if (itemInHand != null && itemInHand.count <= -1) {
+                        this.player.updateInventory(this.player.activeContainer);
+                    }
+                    // CraftBukkit end
+                }
+            }
+        }
+    }
+
+    public void a(PacketPlayInClientCommand packetplayinclientcommand) {
+        this.player.v();
+        EnumClientCommand enumclientcommand = packetplayinclientcommand.c();
+
+        switch (ClientCommandOrdinalWrapper.a[enumclientcommand.ordinal()]) {
+            case 1:
+                if (this.player.viewingCredits) {
+                    this.minecraftServer.getPlayerList().changeDimension(this.player, 0, PlayerTeleportEvent.TeleportCause.END_PORTAL); // CraftBukkit - reroute logic through custom portal management
+                } else if (this.player.r().getWorldData().isHardcore()) {
+                    if (this.minecraftServer.N() && this.player.getName().equals(this.minecraftServer.M())) {
+                        this.player.playerConnection.disconnect("You have died. Game over, man, it\'s game over!");
+                        this.minecraftServer.U();
+                    } else {
+                        GameProfileBanEntry gameprofilebanentry = new GameProfileBanEntry(this.player.getProfile(), (Date) null, "(You just lost the game)", (Date) null, "Death in Hardcore");
+
+                        this.minecraftServer.getPlayerList().getProfileBans().add(gameprofilebanentry);
+                        this.player.playerConnection.disconnect("You have died. Game over, man, it\'s game over!");
+                    }
+                } else {
+                    if (this.player.getHealth() > 0.0F) {
+                        return;
+                    }
+
+                    this.player = this.minecraftServer.getPlayerList().moveToWorld(this.player, 0, false);
+                }
+                break;
+
+            case 2:
+                this.player.getStatisticManager().a(this.player);
+                break;
+
+            case 3:
+                this.player.a((Statistic) AchievementList.f);
+        }
+    }
+
+    public void a(PacketPlayInCloseWindow packetplayinclosewindow) {
+        if (this.player.dead) return; // CraftBukkit
+
+        CraftEventFactory.handleInventoryCloseEvent(this.player); // CraftBukkit
+
+        this.player.m();
+    }
+
+    public void a(PacketPlayInWindowClick packetplayinwindowclick) {
+        if (this.player.dead) return; // CraftBukkit
+
+        this.player.v();
+        if (!this.player.activeContainer.a(this.player)) return; // PaperSpigot - check if player is able to use this container
+        if (this.player.activeContainer.windowId == packetplayinwindowclick.c() && this.player.activeContainer.c(this.player)) {
+            // CraftBukkit start - Call InventoryClickEvent
+            if (packetplayinwindowclick.d() < -1 && packetplayinwindowclick.d() != -999) {
+                return;
+            }
+
+            InventoryView inventory = this.player.activeContainer.getBukkitView();
+            // Spigot start - protocol patch
+            if ( NetworkManager.a( networkManager ).attr( NetworkManager.protocolVersion ).get() >= 17 )
+            {
+                if ( player.activeContainer instanceof ContainerEnchantTable )
+                {
+                    if ( packetplayinwindowclick.slot == 1 )
+                    {
+                        return;
+                    } else if ( packetplayinwindowclick.slot > 1 )
+                    {
+                        packetplayinwindowclick.slot--;
+                    }
+                }
+            }
+            // Spigot end
+            SlotType type = CraftInventoryView.getSlotType(inventory, packetplayinwindowclick.d());
+
+            InventoryClickEvent event = null;
+            ClickType click = ClickType.UNKNOWN;
+            InventoryAction action = InventoryAction.UNKNOWN;
+
+            ItemStack itemstack = null;
+
+            if (packetplayinwindowclick.d() == -1) {
+                type = SlotType.OUTSIDE; // override
+                click = packetplayinwindowclick.e() == 0 ? ClickType.WINDOW_BORDER_LEFT : ClickType.WINDOW_BORDER_RIGHT;
+                action = InventoryAction.NOTHING;
+            } else if (packetplayinwindowclick.h() == 0) {
+                if (packetplayinwindowclick.e() == 0) {
+                    click = ClickType.LEFT;
+                } else if (packetplayinwindowclick.e() == 1) {
+                    click = ClickType.RIGHT;
+                }
+                if (packetplayinwindowclick.e() == 0 || packetplayinwindowclick.e() == 1) {
+                    action = InventoryAction.NOTHING; // Don't want to repeat ourselves
+                    if (packetplayinwindowclick.d() == -999) {
+                        if (player.inventory.getCarried() != null) {
+                            action = packetplayinwindowclick.e() == 0 ? InventoryAction.DROP_ALL_CURSOR : InventoryAction.DROP_ONE_CURSOR;
+                        }
+                    } else {
+                        Slot slot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                        if (slot != null) {
+                            ItemStack clickedItem = slot.getItem();
+                            ItemStack cursor = player.inventory.getCarried();
+                            if (clickedItem == null) {
+                                if (cursor != null) {
+                                    action = packetplayinwindowclick.e() == 0 ? InventoryAction.PLACE_ALL : InventoryAction.PLACE_ONE;
+                                }
+                            } else if (slot.isAllowed(player)) {
+                                if (cursor == null) {
+                                    action = packetplayinwindowclick.e() == 0 ? InventoryAction.PICKUP_ALL : InventoryAction.PICKUP_HALF;
+                                } else if (slot.isAllowed(cursor)) {
+                                    if (clickedItem.doMaterialsMatch(cursor) && ItemStack.equals(clickedItem, cursor)) {
+                                        int toPlace = packetplayinwindowclick.e() == 0 ? cursor.count : 1;
+                                        toPlace = Math.min(toPlace, clickedItem.getMaxStackSize() - clickedItem.count);
+                                        toPlace = Math.min(toPlace, slot.inventory.getMaxStackSize() - clickedItem.count);
+                                        if (toPlace == 1) {
+                                            action = InventoryAction.PLACE_ONE;
+                                        } else if (toPlace == cursor.count) {
+                                            action = InventoryAction.PLACE_ALL;
+                                        } else if (toPlace < 0) {
+                                            action = toPlace != -1 ? InventoryAction.PICKUP_SOME : InventoryAction.PICKUP_ONE; // this happens with oversized stacks
+                                        } else if (toPlace != 0) {
+                                            action = InventoryAction.PLACE_SOME;
+                                        }
+                                    } else if (cursor.count <= slot.getMaxStackSize()) {
+                                        action = InventoryAction.SWAP_WITH_CURSOR;
+                                    }
+                                } else if (cursor.getItem() == clickedItem.getItem() && (!cursor.usesData() || cursor.getData() == clickedItem.getData()) && ItemStack.equals(cursor, clickedItem)) {
+                                    if (clickedItem.count >= 0) {
+                                        if (clickedItem.count + cursor.count <= cursor.getMaxStackSize()) {
+                                            // As of 1.5, this is result slots only
+                                            action = InventoryAction.PICKUP_ALL;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (packetplayinwindowclick.h() == 1) {
+                if (packetplayinwindowclick.e() == 0) {
+                    click = ClickType.SHIFT_LEFT;
+                } else if (packetplayinwindowclick.e() == 1) {
+                    click = ClickType.SHIFT_RIGHT;
+                }
+                if (packetplayinwindowclick.e() == 0 || packetplayinwindowclick.e() == 1) {
+                    if (packetplayinwindowclick.d() < 0) {
+                        action = InventoryAction.NOTHING;
+                    } else {
+                        Slot slot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                        if (slot != null && slot.isAllowed(this.player) && slot.hasItem()) {
+                            action = InventoryAction.MOVE_TO_OTHER_INVENTORY;
+                        } else {
+                            action = InventoryAction.NOTHING;
+                        }
+                    }
+                }
+            } else if (packetplayinwindowclick.h() == 2) {
+                if (packetplayinwindowclick.e() >= 0 && packetplayinwindowclick.e() < 9) {
+                    click = ClickType.NUMBER_KEY;
+                    Slot clickedSlot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                    if (clickedSlot.isAllowed(player)) {
+                        ItemStack hotbar = this.player.inventory.getItem(packetplayinwindowclick.e());
+                        boolean canCleanSwap = hotbar == null || (clickedSlot.inventory == player.inventory && clickedSlot.isAllowed(hotbar)); // the slot will accept the hotbar item
+                        if (clickedSlot.hasItem()) {
+                            if (canCleanSwap) {
+                                action = InventoryAction.HOTBAR_SWAP;
+                            } else {
+                                int firstEmptySlot = player.inventory.getFirstEmptySlotIndex();
+                                if (firstEmptySlot > -1) {
+                                    action = InventoryAction.HOTBAR_MOVE_AND_READD;
+                                } else {
+                                    action = InventoryAction.NOTHING; // This is not sane! Mojang: You should test for other slots of same type
+                                }
+                            }
+                        } else if (!clickedSlot.hasItem() && hotbar != null && clickedSlot.isAllowed(hotbar)) {
+                            action = InventoryAction.HOTBAR_SWAP;
+                        } else {
+                            action = InventoryAction.NOTHING;
+                        }
+                    } else {
+                        action = InventoryAction.NOTHING;
+                    }
+                    // Special constructor for number key
+                    event = new InventoryClickEvent(inventory, type, packetplayinwindowclick.d(), click, action, packetplayinwindowclick.e());
+                }
+            } else if (packetplayinwindowclick.h() == 3) {
+                if (packetplayinwindowclick.e() == 2) {
+                    click = ClickType.MIDDLE;
+                    if (packetplayinwindowclick.d() == -999) {
+                        action = InventoryAction.NOTHING;
+                    } else {
+                        Slot slot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                        if (slot != null && slot.hasItem() && player.abilities.canInstantlyBuild && player.inventory.getCarried() == null) {
+                            action = InventoryAction.CLONE_STACK;
+                        } else {
+                            action = InventoryAction.NOTHING;
+                        }
+                    }
+                } else {
+                    click = ClickType.UNKNOWN;
+                    action = InventoryAction.UNKNOWN;
+                }
+            } else if (packetplayinwindowclick.h() == 4) {
+                if (packetplayinwindowclick.d() >= 0) {
+                    if (packetplayinwindowclick.e() == 0) {
+                        click = ClickType.DROP;
+                        Slot slot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                        if (slot != null && slot.hasItem() && slot.isAllowed(player) && slot.getItem() != null && slot.getItem().getItem() != Item.getItemOf(Blocks.AIR)) {
+                            action = InventoryAction.DROP_ONE_SLOT;
+                        } else {
+                            action = InventoryAction.NOTHING;
+                        }
+                    } else if (packetplayinwindowclick.e() == 1) {
+                        click = ClickType.CONTROL_DROP;
+                        Slot slot = this.player.activeContainer.getSlot(packetplayinwindowclick.d());
+                        if (slot != null && slot.hasItem() && slot.isAllowed(player) && slot.getItem() != null && slot.getItem().getItem() != Item.getItemOf(Blocks.AIR)) {
+                            action = InventoryAction.DROP_ALL_SLOT;
+                        } else {
+                            action = InventoryAction.NOTHING;
+                        }
+                    }
+                } else {
+                    // Sane default (because this happens when they are holding nothing. Don't ask why.)
+                    click = ClickType.LEFT;
+                    if (packetplayinwindowclick.e() == 1) {
+                        click = ClickType.RIGHT;
+                    }
+                    action = InventoryAction.NOTHING;
+                }
+            } else if (packetplayinwindowclick.h() == 5) {
+                itemstack = this.player.activeContainer.clickItem(packetplayinwindowclick.d(), packetplayinwindowclick.e(), 5, this.player);
+            } else if (packetplayinwindowclick.h() == 6) {
+                click = ClickType.DOUBLE_CLICK;
+                action = InventoryAction.NOTHING;
+                if (packetplayinwindowclick.d() >= 0 && this.player.inventory.getCarried() != null) {
+                    ItemStack cursor = this.player.inventory.getCarried();
+                    action = InventoryAction.NOTHING;
+                    // Quick check for if we have any of the item
+                    if (inventory.getTopInventory().contains(org.bukkit.Material.getMaterial(Item.getId(cursor.getItem()))) || inventory.getBottomInventory().contains(org.bukkit.Material.getMaterial(Item.getId(cursor.getItem())))) {
+                        action = InventoryAction.COLLECT_TO_CURSOR;
+                    }
+                }
+            }
+            // TODO check on updates
+
+            if (packetplayinwindowclick.h() != 5) {
+                if (click == ClickType.NUMBER_KEY) {
+                    event = new InventoryClickEvent(inventory, type, packetplayinwindowclick.d(), click, action, packetplayinwindowclick.e());
+                } else {
+                    event = new InventoryClickEvent(inventory, type, packetplayinwindowclick.d(), click, action);
+                }
+
+                org.bukkit.inventory.Inventory top = inventory.getTopInventory();
+                if (packetplayinwindowclick.d() == 0 && top instanceof CraftingInventory) {
+                    org.bukkit.inventory.Recipe recipe = ((CraftingInventory) top).getRecipe();
+                    if (recipe != null) {
+                        if (click == ClickType.NUMBER_KEY) {
+                            event = new CraftItemEvent(recipe, inventory, type, packetplayinwindowclick.d(), click, action, packetplayinwindowclick.e());
+                        } else {
+                            event = new CraftItemEvent(recipe, inventory, type, packetplayinwindowclick.d(), click, action);
+                        }
+                    }
+                }
+
+                server.getPluginManager().callEvent(event);
+
+                switch (event.getResult()) {
+                    case ALLOW:
+                    case DEFAULT:
+                        itemstack = this.player.activeContainer.clickItem(packetplayinwindowclick.d(), packetplayinwindowclick.e(), packetplayinwindowclick.h(), this.player);
+                        // PaperSpigot start - Stackable Buckets
+                        if (itemstack != null &&
+                                ((itemstack.getItem() == Items.LAVA_BUCKET && PaperSpigotConfig.stackableLavaBuckets) ||
+                                        (itemstack.getItem() == Items.WATER_BUCKET && PaperSpigotConfig.stackableWaterBuckets) ||
+                                        (itemstack.getItem() == Items.MILK_BUCKET && PaperSpigotConfig.stackableMilkBuckets))) {
+                            if (action == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
+                                this.player.updateInventory(this.player.activeContainer);
+                            } else {
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(-1, -1, this.player.inventory.getCarried()));
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(this.player.activeContainer.windowId, packetplayinwindowclick.d(), this.player.activeContainer.getSlot(packetplayinwindowclick.d()).getItem()));
+                            }
+                        }
+                        // PaperSpigot end
+                        break;
+                    case DENY:
+                        /* Needs enum constructor in InventoryAction
+                        if (action.modifiesOtherSlots()) {
+
+                        } else {
+                            if (action.modifiesCursor()) {
+                                this.player.playerConnection.sendPacket(new Packet103SetSlot(-1, -1, this.player.inventory.getCarried()));
+                            }
+                            if (action.modifiesClicked()) {
+                                this.player.playerConnection.sendPacket(new Packet103SetSlot(this.player.activeContainer.windowId, packet102windowclick.slot, this.player.activeContainer.getSlot(packet102windowclick.slot).getItem()));
+                            }
+                        }*/
+                        switch (action) {
+                            // Modified other slots
+                            case PICKUP_ALL:
+                            case MOVE_TO_OTHER_INVENTORY:
+                            case HOTBAR_MOVE_AND_READD:
+                            case HOTBAR_SWAP:
+                            case COLLECT_TO_CURSOR:
+                            case UNKNOWN:
+                                this.player.updateInventory(this.player.activeContainer);
+                                break;
+                            // Modified cursor and clicked
+                            case PICKUP_SOME:
+                            case PICKUP_HALF:
+                            case PICKUP_ONE:
+                            case PLACE_ALL:
+                            case PLACE_SOME:
+                            case PLACE_ONE:
+                            case SWAP_WITH_CURSOR:
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(-1, -1, this.player.inventory.getCarried()));
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(this.player.activeContainer.windowId, packetplayinwindowclick.d(), this.player.activeContainer.getSlot(packetplayinwindowclick.d()).getItem()));
+                                break;
+                            // Modified clicked only
+                            case DROP_ALL_SLOT:
+                            case DROP_ONE_SLOT:
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(this.player.activeContainer.windowId, packetplayinwindowclick.d(), this.player.activeContainer.getSlot(packetplayinwindowclick.d()).getItem()));
+                                break;
+                            // Modified cursor only
+                            case DROP_ALL_CURSOR:
+                            case DROP_ONE_CURSOR:
+                            case CLONE_STACK:
+                                this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(-1, -1, this.player.inventory.getCarried()));
+                                break;
+                            // Nothing
+                            case NOTHING:
+                                break;
+                        }
+                        return;
+                }
+            }
+            // CraftBukkit end
+
+            if (ItemStack.matches(packetplayinwindowclick.g(), itemstack)) {
+                this.player.playerConnection.sendPacket(new PacketPlayOutTransaction(packetplayinwindowclick.c(), packetplayinwindowclick.f(), true));
+                this.player.g = true;
+                this.player.activeContainer.b();
+                this.player.broadcastCarriedItem();
+                this.player.g = false;
+            } else {
+                this.n.a(this.player.activeContainer.windowId, Short.valueOf(packetplayinwindowclick.f()));
+                this.player.playerConnection.sendPacket(new PacketPlayOutTransaction(packetplayinwindowclick.c(), packetplayinwindowclick.f(), false));
+                this.player.activeContainer.a(this.player, false);
+                ArrayList arraylist = new ArrayList(this.player.activeContainer.c.size()); // Velt
+
+                for (int i = 0; i < this.player.activeContainer.c.size(); ++i) {
+                    arraylist.add(((Slot) this.player.activeContainer.c.get(i)).getItem());
+                }
+
+                this.player.a(this.player.activeContainer, arraylist);
+
+                // CraftBukkit start - Send a Set Slot to update the crafting result slot
+                if (type == SlotType.RESULT && itemstack != null) {
+                    this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(this.player.activeContainer.windowId, 0, itemstack));
+                }
+                // CraftBukkit end
+            }
+        }
+    }
+
+    public void a(PacketPlayInEnchantItem packetplayinenchantitem) {
+        this.player.v();
+        if (this.player.activeContainer.windowId == packetplayinenchantitem.c() && this.player.activeContainer.c(this.player)) {
+            this.player.activeContainer.a(this.player, packetplayinenchantitem.d());
+            this.player.activeContainer.b();
+        }
+    }
+
+    public void a(PacketPlayInSetCreativeSlot packetplayinsetcreativeslot) {
+        if (this.player.playerInteractManager.isCreative()) {
+            boolean flag = packetplayinsetcreativeslot.c() < 0;
+            ItemStack itemstack = packetplayinsetcreativeslot.getItemStack();
+            boolean flag1 = packetplayinsetcreativeslot.c() >= 1 && packetplayinsetcreativeslot.c() < 36 + PlayerInventory.getHotbarSize();
+            // CraftBukkit - Add invalidItems check
+            boolean flag2 = itemstack == null || itemstack.getItem() != null && (!invalidItems.contains(Item.getId(itemstack.getItem())) || !org.spigotmc.SpigotConfig.filterCreativeItems); // Spigot
+            boolean flag3 = itemstack == null || itemstack.getData() >= 0 && itemstack.count <= 64 && itemstack.count > 0;
+
+            // CraftBukkit start - Call click event
+            if (flag || (flag1 && !ItemStack.matches(this.player.defaultContainer.getSlot(packetplayinsetcreativeslot.c()).getItem(), packetplayinsetcreativeslot.getItemStack()))) { // Insist on valid slot
+
+                org.bukkit.entity.HumanEntity player = this.player.getBukkitEntity();
+                InventoryView inventory = new CraftInventoryView(player, player.getInventory(), this.player.defaultContainer);
+                org.bukkit.inventory.ItemStack item = CraftItemStack.asBukkitCopy(packetplayinsetcreativeslot.getItemStack());
+
+                SlotType type = SlotType.QUICKBAR;
+                if (flag) {
+                    type = SlotType.OUTSIDE;
+                } else if (packetplayinsetcreativeslot.c() < 36) {
+                    if (packetplayinsetcreativeslot.c() >= 5 && packetplayinsetcreativeslot.c() < 9) {
+                        type = SlotType.ARMOR;
+                    } else {
+                        type = SlotType.CONTAINER;
+                    }
+                }
+                InventoryCreativeEvent event = new InventoryCreativeEvent(inventory, type, flag ? -999 : packetplayinsetcreativeslot.c(), item);
+                server.getPluginManager().callEvent(event);
+
+                itemstack = CraftItemStack.asNMSCopy(event.getCursor());
+
+                switch (event.getResult()) {
+                    case ALLOW:
+                        // Plugin cleared the id / stacksize checks
+                        flag2 = flag3 = true;
+                        break;
+                    case DEFAULT:
+                        break;
+                    case DENY:
+                        // Reset the slot
+                        if (packetplayinsetcreativeslot.c() >= 0) {
+                            this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(this.player.defaultContainer.windowId, packetplayinsetcreativeslot.c(), this.player.defaultContainer.getSlot(packetplayinsetcreativeslot.c()).getItem()));
+                            this.player.playerConnection.sendPacket(new PacketPlayOutSetSlot(-1, -1, null));
+                        }
+                        return;
+                }
+            }
+            // CraftBukkit end
+
+            if (flag1 && flag2 && flag3) {
+                if (itemstack == null) {
+                    this.player.defaultContainer.setItem(packetplayinsetcreativeslot.c(), (ItemStack) null);
+                } else {
+                    this.player.defaultContainer.setItem(packetplayinsetcreativeslot.c(), itemstack);
+                }
+
+                this.player.defaultContainer.a(this.player, true);
+            } else if (flag && flag2 && flag3 && this.x < 200) {
+                this.x += 20;
+                EntityItem entityitem = this.player.drop(itemstack, true);
+
+                if (entityitem != null) {
+                    entityitem.e();
+                }
+                // Spigot start - protocol patch
+            } else
+            {
+                if ( flag1 )
+                {
+                    player.playerConnection.sendPacket(
+                            new PacketPlayOutSetSlot( 0,
+                                    packetplayinsetcreativeslot.c(),
+                                    player.defaultContainer.getSlot( packetplayinsetcreativeslot.c() ).getItem()
+                            )
+                    );
+                }
+            }
+            // Spigot end
+        }
+    }
+
+    public void a(PacketPlayInTransaction packetplayintransaction) {
+        if (this.player.dead) return; // CraftBukkit
+        if (!this.player.activeContainer.a(this.player)) return; // PaperSpigot - check if player is able to use this container
+        Short oshort = (Short) this.n.get(this.player.activeContainer.windowId);
+
+        if (oshort != null && packetplayintransaction.d() == oshort.shortValue() && this.player.activeContainer.windowId == packetplayintransaction.c() && !this.player.activeContainer.c(this.player)) {
+            this.player.activeContainer.a(this.player, true);
+        }
+    }
+
+    public void a(PacketPlayInUpdateSign packetplayinupdatesign) {
+        if (this.player.dead) return; // CraftBukkit
+
+        this.player.v();
+        WorldServer worldserver = this.minecraftServer.getWorldServer(this.player.dimension);
+
+        if (worldserver.isLoaded(packetplayinupdatesign.c(), packetplayinupdatesign.d(), packetplayinupdatesign.e())) {
+            TileEntity tileentity = worldserver.getTileEntity(packetplayinupdatesign.c(), packetplayinupdatesign.d(), packetplayinupdatesign.e());
+
+            if (tileentity instanceof TileEntitySign) {
+                TileEntitySign tileentitysign = (TileEntitySign) tileentity;
+
+                if (!tileentitysign.a() || tileentitysign.b() != this.player) {
+                    this.minecraftServer.warning("Player " + this.player.getName() + " just tried to change non-editable sign");
+                    this.sendPacket(new PacketPlayOutUpdateSign(packetplayinupdatesign.c(), packetplayinupdatesign.d(), packetplayinupdatesign.e(), tileentitysign.lines)); // CraftBukkit
+                    return;
+                }
+            }
+
+            int i;
+            int j;
+
+            for (j = 0; j < 4; ++j) {
+                boolean flag = true;
+                packetplayinupdatesign.f()[j] = packetplayinupdatesign.f()[j].replaceAll( "\uF700", "" ).replaceAll( "\uF701", "" ); // Spigot - Mac OSX sends weird chars
+
+                if (packetplayinupdatesign.f()[j].length() > 15) {
+                    flag = false;
+                } else {
+                    for (i = 0; i < packetplayinupdatesign.f()[j].length(); ++i) {
+                        if (!SharedConstants.isAllowedChatCharacter(packetplayinupdatesign.f()[j].charAt(i))) {
+                            flag = false;
+                        }
+                    }
+                }
+
+                if (!flag) {
+                    packetplayinupdatesign.f()[j] = "!?";
+                }
+            }
+
+            if (tileentity instanceof TileEntitySign) {
+                j = packetplayinupdatesign.c();
+                int k = packetplayinupdatesign.d();
+
+                i = packetplayinupdatesign.e();
+                TileEntitySign tileentitysign1 = (TileEntitySign) tileentity;
+
+                // CraftBukkit start
+                Player player = this.server.getPlayer(this.player);
+                SignChangeEvent event = new SignChangeEvent((org.bukkit.craftbukkit.block.CraftBlock) player.getWorld().getBlockAt(j, k, i), this.server.getPlayer(this.player), packetplayinupdatesign.f());
+                this.server.getPluginManager().callEvent(event);
+
+                if (!event.isCancelled()) {
+                    tileentitysign1.lines = org.bukkit.craftbukkit.block.CraftSign.sanitizeLines(event.getLines());
+                    tileentitysign1.isEditable = false;
+                }
+                // System.arraycopy(packetplayinupdatesign.f(), 0, tileentitysign1.lines, 0, 4);
+                // CraftBukkit end
+
+                tileentitysign1.update();
+                worldserver.notify(j, k, i);
+            }
+        }
+    }
+
+    public void a(PacketPlayInKeepAlive packetplayinkeepalive) {
+        // Guardian start
+        this.lastKeepAlivePacketReceived = networkManager.currentTime; // change this logic
+
+        this.packetsNotReceived -= 1;
+
+        if ((this.player.isAlive()) && (!this.player.sleeping) && (this.lastKAPacketTick + 20L > MinecraftServer.currentTick) && (this.lastKAMovementPacket + 100L < MinecraftServer.currentTick) &&
+                (this.lastNotificationTick + 20L < MinecraftServer.currentTick)) {
+            this.lastNotificationTick = MinecraftServer.currentTick;
+        }
+
+        this.lastKAPacketTick = MinecraftServer.currentTick;
+        // Guardian end
+
+        if (packetplayinkeepalive.c() == this.h) {
+            int i = (int) (this.d() - this.i);
+
+            this.player.ping = (this.player.ping * 3 + i) / 4;
+        }
+    }
+
+    private long d() {
+        return System.nanoTime() / 1000000L;
+    }
+
+    public void a(PacketPlayInAbilities packetplayinabilities) {
+        // CraftBukkit start
+        if (this.player.abilities.canFly && this.player.abilities.isFlying != packetplayinabilities.isFlying()) {
+            PlayerToggleFlightEvent event = new PlayerToggleFlightEvent(this.server.getPlayer(this.player), packetplayinabilities.isFlying());
+            this.server.getPluginManager().callEvent(event);
+            if (!event.isCancelled()) {
+                this.player.abilities.isFlying = packetplayinabilities.isFlying(); // Actually set the player's flying status
+            } else {
+                this.player.updateAbilities(); // Tell the player their ability was reverted
+            }
+        }
+        // CraftBukkit end
+    }
+
+    public void a(PacketPlayInTabComplete packetplayintabcomplete) {
+        // Spigot start - Update 20141113a
+        if (PlayerConnection.chatSpamField.addAndGet(this, 20) > 200 && !this.minecraftServer.getPlayerList().isOp(this.player.getProfile())) {
+            this.disconnect("disconnect.spam");
+            return;
+        }
+        // Spigot end
+        ArrayList arraylist = Lists.newArrayList();
+        Iterator iterator = this.minecraftServer.a(this.player, packetplayintabcomplete.c()).iterator();
+
+        while (iterator.hasNext()) {
+            String s = (String) iterator.next();
+
+            arraylist.add(s);
+        }
+
+        this.player.playerConnection.sendPacket(new PacketPlayOutTabComplete((String[]) arraylist.toArray(new String[arraylist.size()])));
+    }
+
+    public void a(PacketPlayInSettings packetplayinsettings) {
+        this.player.a(packetplayinsettings);
+    }
+
+    public void a(PacketPlayInCustomPayload packetplayincustompayload) {
+        PacketDataSerializer packetdataserializer;
+        ItemStack itemstack;
+        ItemStack itemstack1;
+
+        // CraftBukkit start - Ignore empty payloads
+        if (packetplayincustompayload.length <= 0) {
+            return;
+        }
+        // CraftBukkit end
+
+        if ("MC|BEdit".equals(packetplayincustompayload.c())) {
+            packetdataserializer = new PacketDataSerializer(Unpooled.wrappedBuffer(packetplayincustompayload.e()), networkManager.getVersion()); // Spigot - protocol patch
+
+            try {
+                itemstack = packetdataserializer.c();
+                if (itemstack != null) {
+                    if (!ItemBookAndQuill.a(itemstack.getTag())) {
+                        throw new IOException("Invalid book tag!");
+                    }
+
+                    itemstack1 = this.player.inventory.getItemInHand();
+                    if (itemstack1 == null) {
+                        return;
+                    }
+
+                    if (itemstack.getItem() == Items.BOOK_AND_QUILL && itemstack.getItem() == itemstack1.getItem()) {
+                        // MineHQ start - handle book editting better
+                        ItemStack newBook = itemstack1.cloneItemStack();
+                        if (!newBook.hasTag()) {
+                            newBook.setTag(new NBTTagCompound());
+                        }
+                        newBook.tag.set("pages", itemstack.getTag().getList("pages", 8));
+                        CraftEventFactory.handleEditBookEvent(player, newBook); // CraftBukkit
+                        // MineHQ end
+                    }
+
+                    return;
+                }
+                // CraftBukkit start
+            } catch (Exception exception) {
+                c.error("Couldn\'t handle book info", exception);
+                this.disconnect("Invalid book data!");
+                return;
+                // CraftBukkit end
+            } finally {
+                packetdataserializer.release();
+            }
+
+            return;
+        } else if ("MC|BSign".equals(packetplayincustompayload.c())) {
+            packetdataserializer = new PacketDataSerializer(Unpooled.wrappedBuffer(packetplayincustompayload.e()), networkManager.getVersion()); // Spigot - protocol patch
+
+            try {
+                itemstack = packetdataserializer.c();
+                if (itemstack != null) {
+                    if (!ItemWrittenBook.a(itemstack.getTag())) {
+                        throw new IOException("Invalid book tag!");
+                    }
+
+                    itemstack1 = this.player.inventory.getItemInHand();
+                    if (itemstack1 == null) {
+                        return;
+                    }
+
+                    if (itemstack.getItem() == Items.WRITTEN_BOOK && itemstack1.getItem() == Items.BOOK_AND_QUILL) {
+                        // MineHQ start - handle book editting better
+                        ItemStack newBook = itemstack1.cloneItemStack();
+                        if (!newBook.hasTag()) {
+                            newBook.setTag(new NBTTagCompound());
+                        }
+                        newBook.tag.set("author", new NBTTagString(this.player.getName()));
+                        newBook.tag.set("title", new NBTTagString(itemstack.getTag().getString("title")));
+                        newBook.tag.set("pages", itemstack.getTag().getList("pages", 8));
+                        newBook.setItem(Items.WRITTEN_BOOK);
+                        CraftEventFactory.handleEditBookEvent(player, newBook); // CraftBukkit
+                        // MineHQ end
+                    }
+
+                    return;
+                }
+                // CraftBukkit start
+            } catch (Throwable exception1) {
+                c.error("Couldn\'t sign book", exception1);
+                this.disconnect("Invalid book data!");
+                // CraftBukkit end
+                return;
+            } finally {
+                packetdataserializer.release();
+            }
+
+            return;
+        } else {
+            int i;
+            DataInputStream datainputstream;
+
+            if ("MC|TrSel".equals(packetplayincustompayload.c())) {
+                try {
+                    datainputstream = new DataInputStream(new ByteArrayInputStream(packetplayincustompayload.e()));
+                    i = datainputstream.readInt();
+                    Container container = this.player.activeContainer;
+
+                    if (container instanceof ContainerMerchant) {
+                        ((ContainerMerchant) container).e(i);
+                    }
+                    // CraftBukkit start
+                } catch (Throwable exception2) {
+                    c.error("Couldn\'t select trade", exception2);
+                    this.disconnect("Invalid trade data!");
+                    // CraftBukkit end
+                }
+            } else if ("MC|AdvCdm".equals(packetplayincustompayload.c())) {
+                if (!this.minecraftServer.getEnableCommandBlock()) {
+                    this.player.sendMessage(new ChatMessage("advMode.notEnabled", new Object[0]));
+                } else if (this.player.a(2, "") && this.player.abilities.canInstantlyBuild) {
+                    packetdataserializer = new PacketDataSerializer(Unpooled.wrappedBuffer(packetplayincustompayload.e()));
+
+                    try {
+                        byte b0 = packetdataserializer.readByte();
+                        CommandBlockListenerAbstract commandblocklistenerabstract = null;
+
+                        if (b0 == 0) {
+                            TileEntity tileentity = this.player.world.getTileEntity(packetdataserializer.readInt(), packetdataserializer.readInt(), packetdataserializer.readInt());
+
+                            if (tileentity instanceof TileEntityCommand) {
+                                commandblocklistenerabstract = ((TileEntityCommand) tileentity).getCommandBlock();
+                            }
+                        } else if (b0 == 1) {
+                            Entity entity = this.player.world.getEntity(packetdataserializer.readInt());
+
+                            if (entity instanceof EntityMinecartCommandBlock) {
+                                commandblocklistenerabstract = ((EntityMinecartCommandBlock) entity).getCommandBlock();
+                            }
+                        }
+
+                        String s = packetdataserializer.c(packetdataserializer.readableBytes());
+
+                        if (commandblocklistenerabstract != null) {
+                            commandblocklistenerabstract.setCommand(s);
+                            commandblocklistenerabstract.e();
+                            this.player.sendMessage(new ChatMessage("advMode.setCommand.success", new Object[] { s}));
+                        }
+                        // CraftBukkit start
+                    } catch (Throwable exception3) {
+                        c.error("Couldn\'t set command block", exception3);
+                        this.disconnect("Invalid CommandBlock data!");
+                        // CraftBukkit end
+                    } finally {
+                        packetdataserializer.release();
+                    }
+                } else {
+                    this.player.sendMessage(new ChatMessage("advMode.notAllowed", new Object[0]));
+                }
+            } else if ("MC|Beacon".equals(packetplayincustompayload.c())) {
+                if (this.player.activeContainer instanceof ContainerBeacon) {
+                    try {
+                        datainputstream = new DataInputStream(new ByteArrayInputStream(packetplayincustompayload.e()));
+                        i = datainputstream.readInt();
+                        int j = datainputstream.readInt();
+                        ContainerBeacon containerbeacon = (ContainerBeacon) this.player.activeContainer;
+                        Slot slot = containerbeacon.getSlot(0);
+
+                        if (slot.hasItem()) {
+                            slot.a(1);
+                            TileEntityBeacon tileentitybeacon = containerbeacon.e();
+
+                            tileentitybeacon.d(i);
+                            tileentitybeacon.e(j);
+                            tileentitybeacon.update();
+                        }
+                        // CraftBukkit start
+                    } catch (Throwable exception4) {
+                        c.error("Couldn\'t set beacon", exception4);
+                        this.disconnect("Invalid beacon data!");
+                        // CraftBukkit end
+                    }
+                }
+            } else if ("MC|ItemName".equals(packetplayincustompayload.c()) && this.player.activeContainer instanceof ContainerAnvil) {
+                ContainerAnvil containeranvil = (ContainerAnvil) this.player.activeContainer;
+
+                if (packetplayincustompayload.e() != null && packetplayincustompayload.e().length >= 1) {
+                    String s1 = SharedConstants.a(new String(packetplayincustompayload.e(), Charsets.UTF_8));
+
+                    if (s1.length() <= 30) {
+                        containeranvil.a(s1);
+                    }
+                } else {
+                    containeranvil.a("");
+                }
+            }
+            // CraftBukkit start
+            else if (packetplayincustompayload.c().equals("REGISTER")) {
+                try {
+                    String channels = new String(packetplayincustompayload.e(), "UTF8");
+                    for (String channel : channels.split("\0")) {
+                        getPlayer().addChannel(channel);
+                    }
+                } catch (UnsupportedEncodingException ex) {
+                    throw new AssertionError(ex);
+                }
+            } else if (packetplayincustompayload.c().equals("UNREGISTER")) {
+                try {
+                    String channels = new String(packetplayincustompayload.e(), "UTF8");
+                    for (String channel : channels.split("\0")) {
+                        getPlayer().removeChannel(channel);
+                    }
+                } catch (UnsupportedEncodingException ex) {
+                    throw new AssertionError(ex);
+                }
+            } else {
+                server.getMessenger().dispatchIncomingMessage(player.getBukkitEntity(), packetplayincustompayload.c(), packetplayincustompayload.e());
+            }
+            // CraftBukkit end
+        }
+    }
+
+    // Guardian start
+    public void updateMovementSpeed() {
+        AttributeModifiable moveSpeed = (AttributeModifiable) this.player.getAttributeMap().a(GenericAttributes.d);
+        double base = moveSpeed.b();
+        double value = base;
+
+        for (AttributeModifier modifier : (Collection<AttributeModifier>) moveSpeed.a(0)) {
+            value += modifier.d();
+        }
+        for (AttributeModifier modifier : (Collection<AttributeModifier>)  moveSpeed.a(1)) {
+            value += modifier.d() * base;
+        }
+        for (AttributeModifier modifier : (Collection<AttributeModifier>)  moveSpeed.a(2)) {
+            if (modifier != EntityLiving.c) {
+                value *= (1.0D + modifier.d());
+            }
+        }
+        if (value < this.horizontalSpeed)
+        {
+            this.newHorizontalSpeed = value;
+            this.newHorizontalSpeedTime = System.currentTimeMillis();
+        }
+        else
+        {
+            this.horizontalSpeed = value;
+            this.newHorizontalSpeed = 0.0D;
+        }
+    }
+    // Guardian end
+
+    public void a(EnumProtocol enumprotocol, EnumProtocol enumprotocol1) {
+        if (enumprotocol1 != EnumProtocol.PLAY) {
+            throw new IllegalStateException("Unexpected change in protocol!");
+        }
+    }
+
+    // CraftBukkit start - Add "isDisconnected" method
+    public boolean isDisconnected() {
+        return !this.player.joining && !NetworkManager.a(this.networkManager).config().isAutoRead();
+    }
+    // CraftBukkit end
+}

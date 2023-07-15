@@ -1,0 +1,42 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>mspigot-parent</artifactId>
+    <version>1.7.10-R0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <parent>
+        <groupId>net.lugami</groupId>
+        <artifactId>minehq-workspace</artifactId>
+        <version>DEV</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <name>mSpigot</name>
+    <description>Production verison of mSpigot.</description>
+
+    <modules>
+        <module>mspigot-server</module>
+        <module>mspigot-api</module>
+    </modules>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>spigot1-releases</id>
+            <url>https://repo.mikeprimm.com/</url>
+        </repository>
+        <repository>
+            <id>md_5-releases</id>
+            <url>https://repo.md-5.net/content/repositories/releases/</url>
+        </repository>
+        <repository>
+            <id>bungeecord-releases</id>
+            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+        </repository>
+    </repositories>
+</project>

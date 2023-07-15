@@ -1,0 +1,5 @@
+name: Basic
+version: ${git.commit.id.abbrev}
+author: Bridge Development Team
+main: net.lugami.basic.Basic
+depend: [ Bridge, qLib ]

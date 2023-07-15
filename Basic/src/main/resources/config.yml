@@ -1,0 +1,16 @@
+text:
+  network-website: minehq.com
+  teamspeak: ts.minehq.com
+idlekick:
+  enabled: false
+  minutes: 15
+  message: '&cYou have been idle for too long!'
+disallowedCommands:
+  - 'op'
+  - 'reload'
+  - 'rl'
+  - 'me'
+  - 'whisper'
+  - 'w'
+  - 'ver'
+  - 'pl'
