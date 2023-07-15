@@ -1,4 +1,4 @@
-# <p align="center"><b>MineHQ</b><img width="50" src="https://github.com/Desistirei/MineHQ-Minimal/assets/35118711/a1946d21-c9d3-4a98-b588-e929646f190f" alt="MineHQ Logo"></p>
+# <p align="center"><b>MineHQ</b><img width="50" src="https://github.com/Desistirei/MineHQ-Minimal/assets/35118711/525d15da-d574-4a45-8237-4a4bc3473b31" alt="MineHQ Logo"></p>
 
 # What is this repo?
 This is a repo you can use to download source codes to run MineHQ's Practice.
