@@ -6,6 +6,9 @@ This is a repo you can use to download source codes to run MineHQ's Practice.
 # Why is it called "MineHQ-Minimal?"
 It's simple: The sources included here are the bare minimum both to compile and run the Practice.
 
+# Are you sure its the bare minimum?
+No. But these were the plugins I compiled to have a working practice test server.
+
 # What is included?
 - Basic (Sort of a server core, sort of a server helper)
 - Bridge (Rank, Punishments and etc.)
