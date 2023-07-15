@@ -20,3 +20,4 @@ It's simple: The sources included here are the bare minimum both to compile and 
 # Credits
 - FrozenOrb Development Team
 - MineHQ
+>(I did not develop this, but I was the one who made a working workspace for the projects.)
